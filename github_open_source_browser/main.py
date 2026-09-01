@@ -31,7 +31,11 @@ from concurrent.futures import as_completed as _as_completed
 from datetime import timezone as _timezone
 from urllib.parse import urljoin as _urljoin, urlparse as _urlparse
 # 翻译模块：占位保护层与腾讯 TC3 签名（自包含，便于独立维护）。
-from . import translator as _translator
+# 兼容打包后的导入（PyInstaller 打包时相对导入会失败）
+try:
+    from . import translator as _translator
+except ImportError:
+    import translator as _translator
 # 启动故障记录：无控制台模式下也能保留可定位的异常信息。
 _STARTUP_LOG_DIR = (
     _Path(_os.environ.get("APPDATA") or (_Path.home() / "AppData" / "Roaming"))
