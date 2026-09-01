@@ -78,6 +78,73 @@ def protect_markdown_fragment_noop(text, state) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 术语表保护
+# 翻译前保护技术术语（API、Repository 等），避免被翻译接口翻译成中文。
+# ---------------------------------------------------------------------------
+
+# 常见技术术语表（大小写不敏感匹配，输出时保持原文大小写）
+GLOSSARY_TERMS = [
+    # Git/GitHub 相关
+    "API", "CLI", "SDK", "REST", "GraphQL", "OAuth", "SSH", "HTTPS", "HTTP",
+    "Repository", "Pull Request", "Issue", "Fork", "Star", "Gist",
+    "Branch", "Commit", "Merge", "Rebase", "Clone", "Push", "Pull",
+    "README", "LICENSE", "CHANGELOG", "TODO", "FIXME", "HACK",
+    # 编程语言/框架
+    "Python", "JavaScript", "TypeScript", "Rust", "Go", "Java", "C++", "C#",
+    "React", "Vue", "Angular", "Node.js", "Django", "Flask", "FastAPI",
+    "PyQt", "Tkinter", "Electron", "Tauri",
+    # 工具/服务
+    "Docker", "Kubernetes", "K8s", "Terraform", "Ansible", "Jenkins",
+    "GitHub Actions", "GitLab CI", "Travis CI", "CircleCI",
+    "npm", "pip", "cargo", "yarn", "pnpm", "bun",
+    "VSCode", "IntelliJ", "Vim", "Neovim", "Emacs",
+    # 数据格式/协议
+    "JSON", "YAML", "TOML", "XML", "CSV", "Markdown", "HTML", "CSS",
+    "WebSocket", "gRPC", "TCP", "UDP", "DNS", "CDN",
+    # 概念/术语
+    "Open Source", "MIT License", "Apache License", "GPL",
+    "Frontend", "Backend", "Full Stack", "DevOps", "MLOps",
+    "Machine Learning", "Deep Learning", "Neural Network",
+    "CI/CD", "CDN", "WASM", "WebAssembly",
+    # 品牌/产品
+    "GitHub", "GitLab", "Bitbucket", "Jira", "Confluence",
+    "AWS", "Azure", "GCP", "Google Cloud", "Cloudflare",
+    "Vercel", "Netlify", "Heroku", "Railway",
+]
+
+# 预编译术语正则（大小写不敏感，匹配完整单词）
+_GLOSSARY_PATTERN = _re.compile(
+    r'\b(' + '|'.join(_re.escape(t) for t in GLOSSARY_TERMS) + r')\b',
+    _re.IGNORECASE
+)
+
+
+def protect_glossary_terms(text: str) -> tuple[str, list[tuple[str, str]]]:
+    """翻译前保护术语表中的技术术语，返回（保护后文本, 术语映射列表）。
+
+    每个映射为 (占位符, 原文)，翻译后调用 restore_glossary_terms() 恢复。
+    """
+    mappings: list[tuple[str, str]] = []
+
+    def _replace(match) -> str:
+        original = match.group(0)
+        token = placeholder_token(len(mappings) + 1000)  # 偏移 1000 避免与 block 占位符冲突
+        mappings.append((token, original))
+        return token
+
+    protected = _GLOSSARY_PATTERN.sub(_replace, str(text or ""))
+    return protected, mappings
+
+
+def restore_glossary_terms(translated_text: str, mappings: list[tuple[str, str]]) -> str:
+    """翻译后恢复术语表中的技术术语。"""
+    result = str(translated_text or "")
+    for token, original in mappings:
+        result = result.replace(token, original)
+    return result
+
+
+# ---------------------------------------------------------------------------
 # 腾讯云 TC3-HMAC-SHA256 签名
 # ---------------------------------------------------------------------------
 

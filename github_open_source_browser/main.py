@@ -7295,7 +7295,13 @@ def _translation_retry_count(config) -> int:
 
 
 def _translation_call_with_retry(call, source: str, provider: str, config, deadline=None):
-    """在同一个总截止时间内重试当前服务，绝不自动切换到其他第三方。"""
+    """在同一个总截止时间内重试当前服务，绝不自动切换到其他第三方。
+
+    重试间隔采用指数退避策略（1s, 2s, 4s, 8s），比固定间隔更可靠：
+    - 短暂网络抖动：1s 后即可恢复
+    - 服务端限流：给服务端更多恢复时间
+    - 持续故障：避免无效重试浪费时间
+    """
     attempts = _translation_retry_count(config) + 1
     last_error = None
     for attempt in range(attempts):
@@ -7312,7 +7318,8 @@ def _translation_call_with_retry(call, source: str, provider: str, config, deadl
             last_error = exc
         if attempt + 1 >= attempts:
             break
-        wait_seconds = min(0.2 * (attempt + 1), 0.8)
+        # 指数退避：1s, 2s, 4s, 8s（最大）
+        wait_seconds = min(2 ** attempt, 8)
         event = getattr(_TRANSLATION_RUNTIME_STATE, "cancel_event", None)
         if event is not None and event.wait(wait_seconds):
             raise _TranslationCancelled("翻译任务已取消")
@@ -7683,13 +7690,15 @@ def _translate_readme_markdown_with_enhanced_runtime(
     config=None,
     deadline=None,
 ) -> tuple[str, bool]:
-    """保留原有 Markdown 结构处理，同时注入统一超时、取消、服务配置和占位保护。"""
+    """保留原有 Markdown 结构处理，同时注入统一超时、取消、服务配置、占位保护和术语保护。"""
     source = str(markdown_text or "")
     if not source.strip():
         return "", False
     config = _translation_config_from_runtime(config)
     deadline = _translation_deadline(config, deadline)
+    # 两层保护：1) Markdown 结构占位 2) 技术术语保护
     protected_text, placeholders = _protect_markdown_blocks(source)
+    protected_text, glossary_mappings = _translator.protect_glossary_terms(protected_text)
     previous_config = getattr(_TRANSLATION_RUNTIME_STATE, "config", None)
     previous_deadline = getattr(_TRANSLATION_RUNTIME_STATE, "deadline", None)
     try:
@@ -7709,7 +7718,9 @@ def _translate_readme_markdown_with_enhanced_runtime(
             used_external = bool(
                 getattr(_TRANSLATION_RUNTIME_STATE, "last_status", {}).get("used_external")
             )
-        restored = _restore_markdown_blocks(raw_translated, placeholders)
+        # 两层恢复：1) 术语恢复 2) Markdown 结构恢复
+        restored = _translator.restore_glossary_terms(raw_translated, glossary_mappings)
+        restored = _restore_markdown_blocks(restored, placeholders)
         if placeholders:
             present = set(_PLACEHOLDER_RESIDUAL.findall(raw_translated))
             required = {_placeholder_token(i) for i in range(len(placeholders))}
