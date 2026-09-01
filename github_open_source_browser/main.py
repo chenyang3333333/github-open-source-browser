@@ -32,10 +32,21 @@ from datetime import timezone as _timezone
 from urllib.parse import urljoin as _urljoin, urlparse as _urlparse
 # 翻译模块：占位保护层与腾讯 TC3 签名（自包含，便于独立维护）。
 # 兼容打包后的导入（PyInstaller 打包时相对导入会失败）
+# 兼容直接运行 main.py 的场景（无父包、CWD 不含 translator.py）
 try:
     from . import translator as _translator
-except ImportError:
-    import translator as _translator
+except (ImportError, SystemError, FileNotFoundError):
+    # PyInstaller 单文件模式：translator.py 不以独立文件存在，
+    # 但 .spec hiddenimports 已将其注册为 github_open_source_browser.translator，
+    # 用 importlib.import_module 走 PyInstaller 自定义导入器即可命中。
+    try:
+        import translator as _translator
+    except (ImportError, FileNotFoundError):
+        import importlib as _importlib
+        _translator = _importlib.import_module('github_open_source_browser.translator')
+# 注册到 sys.modules，确保内嵌字节码 exec() 中的 import translator 能命中。
+if 'translator' not in _sys.modules:
+    _sys.modules['translator'] = _translator
 # 启动故障记录：无控制台模式下也能保留可定位的异常信息。
 _STARTUP_LOG_DIR = (
     _Path(_os.environ.get("APPDATA") or (_Path.home() / "AppData" / "Roaming"))
