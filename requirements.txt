@@ -1,0 +1,5 @@
+PyQt6>=6.6.0
+requests>=2.31.0
+markdown>=3.5.2
+deep-translator>=1.11.4
+beautifulsoup4>=4.12.0
