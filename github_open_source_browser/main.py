@@ -4376,6 +4376,11 @@ def _text_value(value) -> str:
         return ""
 
 
+def _local_translate(text: str, target: str = "zh-CN") -> str:
+    """使用本地词典翻译文本，仅支持英译中。"""
+    return _translator.local_translate(text, target)
+
+
 def _repo_description_for_target(window, repo: dict) -> str:
     """按当前目标语言读取项目简介，找不到翻译时回退到原文。"""
     if not isinstance(repo, dict):
@@ -7970,6 +7975,9 @@ GitHubService.translate_readme_markdown_with_status = _service_translate_readme_
 GitHubService.translate_readme_markdown = _service_translate_readme_plain_with_enhanced_cache
 
 
+_BATCH_TRANSLATE_MAX_WORKERS = 4  # 批量翻译并发数，避免触发第三方API限流
+
+
 def _batch_translate_with_enhanced_cache(self, texts: list[str]) -> list[str]:
     if not texts:
         return []
@@ -7990,20 +7998,31 @@ def _batch_translate_with_enhanced_cache(self, texts: list[str]) -> list[str]:
             missing.append(text)
         else:
             translated_map[text] = cached
-    for source in missing:
-        result, _used_external = _translate_short_text_with_provider_enhanced(
-            source,
-            "auto",
-            target,
-            config,
-        )
-        result = _text_value(result) or source
-        translated_map[source] = result
-        if (
-            _translation_cache_is_enabled(config)
-            and _translation_result_is_valid(source, result)
-        ):
-            _write_translation_cache_value_with_switch(self, key_map[source], result)
+
+    # 并发翻译未缓存的文本
+    if missing:
+        def _translate_one(source: str) -> tuple[str, str]:
+            """翻译单条文本，返回 (原文, 译文)。"""
+            result, _used_external = _translate_short_text_with_provider_enhanced(
+                source, "auto", target, config,
+            )
+            return source, _text_value(result) or source
+
+        with _OriginalThreadPoolExecutor(max_workers=_BATCH_TRANSLATE_MAX_WORKERS) as pool:
+            futures = {pool.submit(_translate_one, src): src for src in missing}
+            for future in _as_completed(futures):
+                try:
+                    source, result = future.result()
+                except Exception:
+                    source = futures[future]
+                    result = source
+                translated_map[source] = result
+                if (
+                    _translation_cache_is_enabled(config)
+                    and _translation_result_is_valid(source, result)
+                ):
+                    _write_translation_cache_value_with_switch(self, key_map[source], result)
+
     return [
         translated_map.get(text, text) if _text_value(text) else text
         for text in texts
