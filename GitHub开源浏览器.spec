@@ -27,6 +27,7 @@ analysis = Analysis(
         'concurrent.futures',
         'urllib.parse',
         'datetime',
+        'github_open_source_browser.translator',
     ],
     hookspath=[],
     hooksconfig={},
