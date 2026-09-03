@@ -1,4 +1,9 @@
+# Trae 工作区配置
+.trae/
+
 __pycache__/
+.pytest_cache/
+.coverage
 *.py[cod]
 *.pyo
 *.pyd
