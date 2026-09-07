@@ -1,8 +1,5 @@
 <h1 align="center">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/discover.png">
-      <img alt="GitHub 开源项目浏览器" src="docs/screenshots/discover.png" width="800">
-    </picture>
+    <img alt="GitHub 开源项目浏览器" src="docs/screenshots/demo.gif" width="800">
     <br>
     GitHub 开源项目浏览器
     <br>
