@@ -122,7 +122,7 @@ python run_app.py --run
 
 ### 方式一：直接运行（推荐）
 
-下载 `GitHub开源浏览器.exe`，双击即可运行。首次启动自动加载数据（约 10~15 秒），无需安装 Python。
+从 [Releases](https://github.com/chenyang3333333/github-open-source-browser/releases/latest) 下载 `GitHub.exe`，双击即可运行。首次启动自动加载数据（约 10~15 秒），无需安装 Python。
 
 ### 方式二：源码运行
 
