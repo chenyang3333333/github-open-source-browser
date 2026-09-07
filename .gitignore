@@ -1,0 +1,29 @@
+# 构建产物与运行时文件
+GitHub开源浏览器.exe
+GitHub开源浏览器.spec
+build/
+dist/
+__pycache__/
+*.pyc
+
+# 本地调试 / 复现脚本与产物（不推送）
+_mini_repro.py
+_repro_crash.py
+_repro_*.json
+_repro_*.db
+_repro_*.db-shm
+_repro_*.db-wal
+_repro_*.log
+{tmpdir}/
+# 本地临时校验/测试脚本（不推送）
+_check_json.py
+_test_api.py
+
+# IDE / 工作流
+.trae/
+.idea/
+.vscode/
+
+# 系统文件
+Thumbs.db
+Desktop.ini
