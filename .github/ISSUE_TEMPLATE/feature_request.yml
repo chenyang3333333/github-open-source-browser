@@ -1,0 +1,39 @@
+name: 功能建议
+description: 提出一个新功能建议
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你的功能建议！请描述你希望添加的功能。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 问题描述
+      description: 这个功能解决了什么问题？
+      placeholder: 例如：每次打开程序都要重新设置翻译语言，很麻烦
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: 期望方案
+      description: 描述你希望的解决方案
+      placeholder: 例如：希望记住上次选择的翻译语言
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 替代方案
+      description: 是否有其他替代方案？
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: 补充信息
+      description: 其他你认为有帮助的信息（截图、参考链接等）
