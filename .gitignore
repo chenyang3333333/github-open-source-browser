@@ -9,15 +9,21 @@ __pycache__/
 # 本地调试 / 复现脚本与产物（不推送）
 _mini_repro.py
 _repro_crash.py
-_repro_*.json
-_repro_*.db
-_repro_*.db-shm
-_repro_*.db-wal
-_repro_*.log
+_repro*.py
+_repro*.log
+_repro*.json
+_repro*.db
+_repro*.db-shm
+_repro*.db-wal
 {tmpdir}/
-# 本地临时校验/测试脚本（不推送）
-_check_json.py
-_test_api.py
+# 本地临时校验/测试/验证脚本（不推送）
+_check_*.py
+_read_*.py
+_test_*.py
+_test_*.log
+_verify_*.py
+# 开发日志
+开发日志.md
 
 # IDE / 工作流
 .trae/

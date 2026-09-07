@@ -61,7 +61,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "auto_translate_readme": False,
     "request_interval_ms": 200,
     "concurrent_limit": 3,
-    "fallback_chain": ["tencent", "microsoft", "openai_compatible"],
+    "fallback_chain": ["microsoft", "google"],
 }
 
 # 增强配置的默认值（与旧版兼容）
@@ -109,16 +109,11 @@ def _config_bool(value: Any, default: bool) -> bool:
 
 _TRANSLATION_PROVIDER_OPTIONS = (
     (tr("provider.auto"), "auto"),
-    (tr("provider.tencent"), "tencent"),
-    (tr("provider.microsoft"), "microsoft"),
-    (tr("provider.deepl"), "deepl"),
     (tr("provider.google"), "google"),
-    (tr("provider.openai"), "openai_compatible"),
-    (tr("provider.claude"), "claude"),
-    (tr("provider.gemini"), "gemini"),
-    (tr("provider.mimo"), "mimo"),
+    (tr("provider.microsoft"), "microsoft"),
     (tr("provider.local"), "local"),
 )
+# 全部可用供应商（用于校验规范化结果与回退链项）
 _TRANSLATION_PROVIDER_VALUES = {value for _, value in _TRANSLATION_PROVIDER_OPTIONS}
 
 
@@ -128,32 +123,20 @@ def normalize_translation_provider(value: Any) -> str:
         "": "auto",
         "自动": "auto",
         "自动选择": "auto",
-        "tencent": "tencent",
-        "腾讯": "tencent",
-        "腾讯云": "tencent",
-        "tencent_cloud": "tencent",
         "microsoft": "microsoft",
         "微软": "microsoft",
         "微软翻译": "microsoft",
         "edge": "microsoft",
         "edge微软": "microsoft",
-        "deepl": "deepl",
         "google": "google",
         "google_cloud": "google",
-        "openai_compatible": "openai_compatible",
-        "openai": "openai_compatible",
-        "deepseek": "openai_compatible",
-        "qwen": "openai_compatible",
-        "claude": "claude",
-        "anthropic": "claude",
-        "gemini": "gemini",
-        "google_ai": "gemini",
-        "mimo": "mimo",
-        "xiaomi": "mimo",
+        "谷歌": "google",
         "local": "local",
         "本地": "local",
     }
-    return aliases.get(raw, "auto")
+    result = aliases.get(raw, "auto")
+    # 已被移除的供应商（LLM/腾讯/DeepL）或未知值统一回退到 auto，兼容旧配置
+    return result if result in _TRANSLATION_PROVIDER_VALUES else "auto"
 
 
 # ---------------------------------------------------------------------------

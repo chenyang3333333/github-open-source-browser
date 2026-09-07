@@ -182,14 +182,19 @@ class MainWindow(QMainWindow):
         self._discover_no_more = False  # API 已无更多数据
         self._discover_fetch_gen = 0  # 分页请求代数：刷新时递增，丢弃过期分页结果
 
+        # 热榜无限滚动：后续周期扩展抓取状态
+        self._trending_no_more = False  # 已无更多周期内容
+        self._trending_periods: list[str] = []  # 待抓取的后续周期队列
+        self._trending_fetch_gen = 0  # 扩展抓取代数：刷新时递增，丢弃过期结果
+
         self._init_ui()
         self._connect_signals()
         self._apply_theme()
         on_language_changed(self._retranslate_ui)
 
-        # 延迟加载
+        # 延迟加载（启动后加载趋势热榜）
         if self.config.get("startup_auto_load", True):
-            QTimer.singleShot(0, self.refresh_repos)
+            QTimer.singleShot(0, self.refresh_trending)
 
         # Release notification check
         if self.config.get("release_notify", True):
@@ -252,7 +257,7 @@ class MainWindow(QMainWindow):
         toolbar_layout.addStretch()
 
         self.refresh_btn = QPushButton(tr("btn.refresh"))
-        self.refresh_btn.setObjectName("primaryButton")
+        # 不使用 primaryButton 高亮样式（蓝色强调），保持普通按钮外观
         self.refresh_btn.setFixedHeight(32)
         toolbar_layout.addWidget(self.refresh_btn)
 
@@ -321,8 +326,10 @@ class MainWindow(QMainWindow):
         # 视图切换
         self.view_combo = QComboBox()
         self.view_combo.setObjectName("viewCombo")
-        for value, label in VIEW_DISPLAY_LABELS.items():
-            self.view_combo.addItem(label, value)
+        # 主界面视图：趋势热榜 / 我的收藏 / 历史（已移除“发现项目”，
+        # 搜索结果复用 discover 页作为查询结果容器，不占用视图下拉项）
+        for value in ("trending", "favorites", "history"):
+            self.view_combo.addItem(VIEW_DISPLAY_LABELS[value], value)
         left_layout.addWidget(self.view_combo)
 
         # QStackedWidget
@@ -388,6 +395,7 @@ class MainWindow(QMainWindow):
         self._view_stack.addWidget(self._dashboard_page)
 
         left_layout.addWidget(self._view_stack, 1)
+        self._view_stack.setCurrentIndex(1)  # 默认显示趋势热榜页
 
         self.list_summary_label = QLabel("")
         self.list_summary_label.setObjectName("descLabel")
@@ -554,7 +562,7 @@ class MainWindow(QMainWindow):
         # 递增翻译代数：中断旧视图的详情/README 加载与翻译，把线程池资源留给新视图
         self._translation_gen += 1
         view = self.view_combo.currentData()
-        page_map = {"discover": 0, "trending": 1, "favorites": 2, "history": 3, "dashboard": 4}
+        page_map = {"trending": 1, "favorites": 2, "history": 3, "dashboard": 4}
         self._view_stack.setCurrentIndex(page_map.get(view, 0))
         self._update_list_summary()
         if view == "history":
@@ -578,32 +586,10 @@ class MainWindow(QMainWindow):
         self._current_category = category
         for btn in self._category_buttons:
             btn.setChecked(btn.property("cat_value") == category)
-        view = self.view_combo.currentData()
-        category_languages = self._current_category_languages()
-        if view == "discover" and category_languages:
-            # 有语言映射的分类：按分类语言重新搜索
-            self.refresh_repos(category_languages=category_languages)
-        elif view == "trending" and category_languages:
-            # 热榜按分类语言重新抓取该领域
-            self.refresh_trending(category_languages=category_languages)
-        else:
-            self._apply_category_filter()
-
-    def _apply_category_filter(self):
-        view = self.view_combo.currentData()
-        category = self._current_category
-        if view == "discover":
-            source = list(self._repos)
-            visible = filter_repos_by_category(source, category)
-            self._display_repos = self._sort_repos(visible)
-            self._render_discover_items(self._display_repos)
-        elif view == "trending":
-            source = list(self._trending_items)
-            visible = filter_repos_by_category(source, category)
-            # 本地过滤兜底保持官方排名顺序，不做星星重排
-            self._display_trending_items = visible
-            self._render_trending_items(visible)
-        self._update_list_summary()
+        # 搜索词优先级最高：搜索词存在时列表保持搜索结果，分类仅在无词时切换热榜领域
+        if self.search_edit.text().strip():
+            return
+        self.refresh_trending(category_languages=self._current_category_languages())
 
     # ------------------------------------------------------------------
     # 列表渲染
@@ -647,7 +633,11 @@ class MainWindow(QMainWindow):
             return
         self._discover_api_loading = True
         keyword = self.search_edit.text().strip()
-        category_languages = self._current_category_languages()
+        if keyword:
+            # 搜索词优先级最高：搜索场景下一页不再叠加分类，保证结果不受分类影响
+            category_languages = None
+        else:
+            category_languages = self._current_category_languages()
         next_page = self._discover_page + 1
         fetch_gen = self._discover_fetch_gen
 
@@ -669,8 +659,8 @@ class MainWindow(QMainWindow):
                 self._discover_no_more = True
                 self.statusBar().showMessage(tr("status.all_loaded"), 2000)
                 return
-            if category_languages is None and self._current_category:
-                # 无语言映射的分类（如 security）：对追加数据本地过滤兜底
+            if not keyword and category_languages is None and self._current_category:
+                # 非搜索场景、无语言映射的分类（如 security）：对追加数据本地过滤兜底
                 repos = filter_repos_by_category(repos, self._current_category)
             self._discover_page = next_page
             if not repos:
@@ -713,14 +703,15 @@ class MainWindow(QMainWindow):
         return f"{prefix} #{repo.get('rank', '-')}  ⭐{repo.get('stars', 0)} {stars_text}  {name_part}  {language}\n{brief}"
 
     def _load_more_trending(self):
-        """加载下一批热榜项目并翻译。"""
-        self._loading_more = True
+        """加载下一批热榜项目并翻译；本地缓存渲染完后抓取后续周期继续滚动。"""
         repos = self._display_trending_items
         start = self._trending_rendered
         end = min(start + self._page_size, len(repos))
         if start >= end:
-            self._loading_more = False
+            # 本地缓存已渲染完：尝试从后续周期抓取更多热榜
+            self._fetch_more_trending()
             return
+        self._loading_more = True
         batch = repos[start:end]
         for repo in batch:
             text = self._trending_item_text(repo)
@@ -730,8 +721,69 @@ class MainWindow(QMainWindow):
         self._trending_rendered = end
         self._update_list_summary()
         self._loading_more = False
-        # 翻译这批项目
+        # 翻译这批项目（含第一个项目，逐一翻译并保留官方排名）
         self._translate_visible_batch(batch, self.trending_list, start)
+
+    def _fetch_more_trending(self):
+        """滚动到底时从后续周期抓取更多热榜，去重后连续排名并渲染翻译。"""
+        if self._loading_more or self._trending_no_more:
+            return
+        if not self._trending_periods:
+            # 已无后续周期：标记耗尽并提示
+            self._trending_no_more = True
+            self.statusBar().showMessage(tr("status.all_loaded"), 2000)
+            return
+        self._loading_more = True
+        since = self._trending_periods.pop(0)
+        lang = self.config.get("trending_language", "")
+        category_languages = self._current_category_languages()
+        fetch_gen = self._trending_fetch_gen
+
+        def task():
+            fetched = []
+            if category_languages:
+                # 分类场景：按分类语言分别抓取并合并
+                for clang in category_languages:
+                    url_lang = str(clang).strip().replace(" ", "-")
+                    try:
+                        fetched.extend(self.service.scrape_trending(since, url_lang))
+                    except Exception:
+                        pass
+            else:
+                fetched.extend(self.service.scrape_trending(since, lang))
+            return fetched
+
+        def on_done(repos):
+            self._loading_more = False
+            if fetch_gen != self._trending_fetch_gen:
+                return  # 刷新已重置，丢弃过期扩展结果
+            # 分类（无语言映射）本地过滤兜底，保持连续排名
+            if self._current_category and not category_languages:
+                repos = filter_repos_by_category(repos, self._current_category)
+            existing = {r.get("full_name") for r in self._display_trending_items if r.get("full_name")}
+            new_repos = [r for r in repos or [] if r.get("full_name") and r["full_name"] not in existing]
+            if not new_repos:
+                # 该周期无去重后新内容：继续尝试下一周期
+                self._fetch_more_trending()
+                return
+            # 连续排名：从当前总数继续编号，不再重置为 1
+            next_rank = len(self._display_trending_items) + 1
+            for r in new_repos:
+                r["rank"] = next_rank
+                next_rank += 1
+            self._trending_items.extend(new_repos)
+            self._display_trending_items.extend(new_repos)
+            self.statusBar().showMessage(tr("status.loaded_trending", count=len(new_repos)))
+            # 从已渲染位置继续渲染本批，并自动触发该批次项目的翻译
+            self._load_more_trending()
+
+        def on_error(msg):
+            self._loading_more = False
+            if fetch_gen != self._trending_fetch_gen:
+                return
+            self.statusBar().showMessage(tr("status.trending_failed", msg=msg), 3000)
+
+        self._run_in_thread(task, on_done, on_error)
 
     def _on_discover_scroll(self, value):
         if self._loading_more:
@@ -779,8 +831,12 @@ class MainWindow(QMainWindow):
         if not self._translate_queue:
             self._translate_anim_timer.stop()
             return
-        # 给详情翻译预留 1 个池线程，避免详情翻译被列表任务排队挡住
-        limit = max(1, int(self.config.get("concurrent_limit", 3)) - 1)
+        # 列表翻译用满并发；详情翻译已有独立专用线程池（detail_translate_pool），
+        # 互不阻塞，无需再为它让出并发，避免滚动加载的新行长时间排不到翻译
+        limit = max(1, int(self.config.get("concurrent_limit", 3)))
+        # 同步线程池上限，使“并发翻译数”设置在运行中调大后立即生效
+        if self.translate_pool.maxThreadCount() != limit:
+            self.translate_pool.setMaxThreadCount(limit)
         target = self.config.get("target_language", "zh-CN")
         while self._active_translations < limit and self._translate_queue:
             idx, repo, original, cache_key, list_widget = self._translate_queue.pop(0)
@@ -794,9 +850,18 @@ class MainWindow(QMainWindow):
                     # translate_description 返回 str；翻译失败时内部回退原文
                     translated = self.service.translate_description(original, target, deadline=time.monotonic() + 15)
                     ok = bool(translated) and translated != original
-                    # 名称翻译（失败时回退原文，不覆盖）
+                    # 名称翻译优先本地词典：本地无法产出有意义译文（如 user/repo 标识符）时
+                    # 保留原文，避免每个项目额外一次代理请求拖慢整批翻译
                     full_name = repo.get("full_name", "")
-                    translated_name = self.service.translate_text(full_name, "en", target, deadline=time.monotonic() + 15) if full_name else ""
+                    translated_name = ""
+                    if full_name:
+                        try:
+                            from github_open_source_browser.translator import local_translate as _lt_name
+                            translated_name = _lt_name(full_name, target) or ""
+                        except Exception:
+                            translated_name = ""
+                        if not translated_name or translated_name == full_name:
+                            translated_name = ""
                     return (idx, repo, translated, translated_name, cache_key, list_widget) if ok else None
                 except Exception as e:
                     logger.warning("列表翻译任务异常: %s", e)
@@ -941,6 +1006,13 @@ class MainWindow(QMainWindow):
 
     def refresh_repos(self, category_languages: list[str] | None = None):
         keyword = self.search_edit.text().strip()
+        if not keyword:
+            # 无搜索词：回到趋势热榜（按当前分类领域），搜索词优先级最高时不受分类影响
+            idx = self.view_combo.findData("trending")
+            if idx >= 0:
+                self.view_combo.setCurrentIndex(idx)
+            self.refresh_trending(category_languages=self._current_category_languages())
+            return
         lang = self.lang_combo.currentData() or ""
         old_lang = self.config.get("language", "")
         if lang != old_lang:
@@ -970,6 +1042,7 @@ class MainWindow(QMainWindow):
             self._repos = repos
             self._display_repos = list(repos)
             self._render_discover_items(repos)
+            self._view_stack.setCurrentIndex(0)  # 主列表切换为搜索结果容器
             self.statusBar().showMessage(tr("status.loaded_projects", count=len(repos)))
 
         def on_error(msg):
@@ -1017,8 +1090,16 @@ class MainWindow(QMainWindow):
                 repos = filter_repos_by_category(repos, self._current_category)
             self._trending_items = repos
             self._display_trending_items = list(repos)
+            # 刷新后重置无限滚动状态：记录后续待抓取周期，递增代数丢弃在途扩展结果
+            self._trending_no_more = False
+            self._trending_periods = self.service.trending_periods_after(since)
+            self._trending_fetch_gen += 1
+            self._loading_more = False
             self._render_trending_items(repos)
-            self.view_combo.setCurrentIndex(1)  # 切换到热榜视图
+            # 切到热榜视图（combo 项已移除“发现项目”，用 data 定位而非固定索引）
+            idx = self.view_combo.findData("trending")
+            if idx >= 0:
+                self.view_combo.setCurrentIndex(idx)
             self.statusBar().showMessage(tr("status.loaded_trending", count=len(repos)))
 
         def on_error(msg):
@@ -1056,10 +1137,12 @@ class MainWindow(QMainWindow):
         self._show_detail(repo)
 
     def _show_detail(self, repo):
-        # 递增翻译代数，取消之前所有进行中的翻译
+        # 递增翻译代数，取消之前所有进行中的详情翻译（README 加载/翻译、图片嵌入）。
+        # 注意：这里不设置 _batch_cancel、不清空 _translate_queue——列表批量翻译在
+        # 独立 translate_pool 运行，详情翻译走 detail_translate_pool，互不争抢线程；
+        # 若在此清空列表翻译队列，已渲染批次中尚未出队的项目会永久丢失翻译
+        # （只有下一批 _translate_visible_batch 才会恢复补位，最后一批则永不翻译）。
         self._translation_gen += 1
-        self._batch_cancel = True
-        self._translate_queue.clear()
         self._translate_anim_timer.stop()
         self._batch_translate_total = 0
         self._batch_translate_done = 0
@@ -1197,9 +1280,9 @@ class MainWindow(QMainWindow):
         repo = self._current_repo
         if not repo:
             return
+        # 只递增详情翻译代数取消旧详情任务；不设置 _batch_cancel、不清空列表翻译队列，
+        # 详情翻译走 detail_translate_pool，与列表批量翻译互不干扰
         self._translation_gen += 1
-        self._batch_cancel = True
-        self._translate_queue.clear()
         self._batch_translate_total = 0
         self._batch_translate_done = 0
         current_gen = self._translation_gen
@@ -1212,8 +1295,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, '_loading'):
             self._loading.show_loading(tr("status.translating"))
 
-        # 描述翻译与 README 翻译拆成两个独立 Worker，互不阻塞、各带总时长上限
-        pending = {"n": 2 if self._current_readme else 1}
+        # 描述翻译与 README 翻译拆成两个独立 Worker，互不阻塞、各带总时长上限。
+        # README 未加载完成时由 task_readme 内部补加载，保证翻译按钮始终产出译文。
+        pending = {"n": 2}
 
         def finish():
             pending["n"] -= 1
@@ -1238,7 +1322,16 @@ class MainWindow(QMainWindow):
             if self._translation_gen != current_gen:
                 return None
             cached_readme = self._current_readme or ""
-            return self.service.translate_readme(cached_readme, target, deadline=time.monotonic() + 60) if cached_readme else ""
+            if cached_readme:
+                return self.service.translate_readme(cached_readme, target, deadline=time.monotonic() + 60)
+            # README 尚未加载完成：先补加载再翻译，保证翻译按钮始终能产出 README 译文
+            if self._translation_gen != current_gen:
+                return None
+            readme = self.service.get_readme(repo.get("full_name", ""))
+            if self._translation_gen != current_gen:
+                return None
+            self._current_readme = readme or ""
+            return self.service.translate_readme(self._current_readme, target, deadline=time.monotonic() + 60) if self._current_readme else ""
 
         def on_desc(result):
             if current_gen == self._translation_gen and result:
@@ -1251,8 +1344,8 @@ class MainWindow(QMainWindow):
             finish()
 
         self._run_translate_in_thread(task_desc, on_desc, lambda msg: finish(), pool=self.detail_translate_pool)
-        if self._current_readme:
-            self._run_translate_in_thread(task_readme, on_readme, lambda msg: finish(), pool=self.detail_translate_pool)
+        # 无条件启动 README 翻译：cached_readme 为空时 task_readme 内部会补加载再翻译
+        self._run_translate_in_thread(task_readme, on_readme, lambda msg: finish(), pool=self.detail_translate_pool)
 
     def _on_translate_anim_tick(self):
         """翻译动画：状态栏文字循环显示 翻译中. / 翻译中.. / 翻译中..."""

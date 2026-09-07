@@ -266,6 +266,7 @@ def normalize_topics(value: Any) -> list[str]:
 
 REPOSITORY_PAGE_SIZE = 50
 TRENDING_PAGE_SIZE = 50
+TRENDING_PERIODS = ["daily", "weekly", "monthly"]
 
 
 class GitHubService:
@@ -377,6 +378,15 @@ class GitHubService:
         resp.raise_for_status()
         return self._parse_trending_html(resp.text, since)
 
+    @staticmethod
+    def trending_periods_after(since: str = "daily") -> list[str]:
+        """返回 since 之后尚未抓取的周期队列，用于热榜滚动无限加载。"""
+        try:
+            idx = TRENDING_PERIODS.index(since)
+        except ValueError:
+            return []
+        return TRENDING_PERIODS[idx + 1:]
+
     def _parse_trending_html(self, html: str, since: str) -> list[dict]:
         soup = BeautifulSoup(html, "html.parser")
         repos = []
@@ -485,7 +495,7 @@ class GitHubService:
     # ------------------------------------------------------------------
 
     def translate_text(self, text: str, source: str = "en", target: str = "zh-CN", deadline: float = 0) -> str:
-        """翻译文本，优先使用缓存，然后尝试供应商，最后回退本地。"""
+        """翻译文本：优先 30 天缓存，其次永久记忆库，再走代理，成功后自动学习。"""
         if not text or not text.strip():
             return text
         # 检查缓存
@@ -493,14 +503,41 @@ class GitHubService:
             cached = self.cache.get(text, target)
             if cached:
                 return cached
+        # 检查翻译记忆库（代理结果永久沉淀，命中无需联网）
+        try:
+            memory = self.db.get_translation_memory(text, target)
+            if memory:
+                return memory
+        except Exception:
+            pass
         # 调用翻译服务（复用 http 会话连接）
         from github_open_source_browser.services.translation_service import translate_text as _do_translate
         translated, _used = _do_translate(text, source, target, self.config, deadline, session=self.http.session)
         if translated and translated != text:
             if self.config.get("translation_cache_enabled", True):
                 self.cache.set(text, translated)
+            self._learn_from_translation(text, target, translated)
             return translated
         return text
+
+    def _learn_from_translation(self, source: str, target: str, translated: str) -> None:
+        """代理翻译成功后，把结果沉淀进翻译记忆库，并自动收录源文本中的新词。"""
+        try:
+            if target not in ("zh-CN", "zh-TW", "zh"):
+                return
+            if not re.search(r'[\u4e00-\u9fff]', translated or ""):
+                return
+            # 文本过长或过短不学习（README 等整段内容不进入记忆库）
+            length = len(source or "")
+            if length > 500 or length < 5:
+                return
+            # 本地词典已能产出相同结果时，说明结果不来自代理，无需学习
+            if local_translate(source, target) == translated:
+                return
+            self.db.set_translation_memory(source, target, translated)
+            self.db.record_learned_terms(source, translated)
+        except Exception:
+            pass
 
     def translate_description(self, text: str, target: str = "zh-CN", deadline: float = 0) -> str:
         """翻译项目简介。"""

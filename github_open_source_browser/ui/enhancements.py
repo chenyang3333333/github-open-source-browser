@@ -35,8 +35,9 @@ _ORIGINAL_CLOSE_EVENT = MainWindow.closeEvent
 # ---------------------------------------------------------------------------
 
 
-def _embed_readme_images(self, html_text):
-    """异步下载 README 中的图片并转为 base64 内嵌。"""
+def _embed_readme_images(self, html_text, gen=None):
+    """异步下载 README 中的图片并转为 base64 内嵌。gen 为捕获的详情翻译代数，
+    切换项目后代数变化，任务即放弃，避免旧详情的图片嵌入覆盖新详情。"""
     img_pattern = re.compile(r'<img[^>]+src=["\']([^"\']+)["\'][^>]*>', re.IGNORECASE)
     urls = img_pattern.findall(html_text)
     if not urls:
@@ -46,8 +47,10 @@ def _embed_readme_images(self, html_text):
         result = html_text
         deadline = time.monotonic() + 12  # 整体限时，避免关闭程序时长时间等待
         for url in urls:
-            if time.monotonic() > deadline or self._batch_cancel:
+            if time.monotonic() > deadline:
                 break
+            if gen is not None and self._translation_gen != gen:
+                return None  # 已切换到其他项目，放弃嵌入
             if url.startswith("data:"):
                 continue
             b64 = self.service.download_image_as_base64(url)
@@ -56,8 +59,8 @@ def _embed_readme_images(self, html_text):
         return result
 
     def on_done(new_html):
-        if self._batch_cancel:
-            return  # 视图已切换，放弃嵌入结果
+        if gen is not None and self._translation_gen != gen:
+            return  # 已切换到其他项目，放弃嵌入结果
         if new_html and new_html != html_text:
             self.readme_browser.setHtml(new_html)
 
@@ -67,8 +70,9 @@ def _embed_readme_images(self, html_text):
 def _show_detail_with_images(self, repo):
     """详情页加载完成后嵌入图片。"""
     _ORIGINAL_SHOW_DETAIL(self, repo)
-    # 延迟一下等渲染完成再提取 HTML 中的图片
-    QTimer.singleShot(500, lambda: _embed_readme_images(self, self.readme_browser.toHtml()))
+    # 延迟一下等渲染完成再提取 HTML 中的图片；捕获当前翻译代数，切换详情后放弃
+    gen = self._translation_gen
+    QTimer.singleShot(500, lambda: _embed_readme_images(self, self.readme_browser.toHtml(), gen))
 
 
 MainWindow._embed_readme_images = _embed_readme_images
@@ -87,6 +91,7 @@ def _render_discover_items_batched(self, repos):
     self._display_repos = list(repos)
     self._discover_batch_queue = list(repos)
     self._discover_batch_index = 0
+    self._discover_rendered = 0  # 与本页滚动加载计数对齐，渲染完成后由 _render_discover_batch 收尾
     self._render_discover_batch()
     self._update_list_summary()
 
@@ -107,6 +112,10 @@ def _render_discover_batch(self):
     self._discover_batch_index = idx
     if idx < len(queue):
         QTimer.singleShot(16, self._render_discover_batch)
+    else:
+        # 本批全部渲染完成：同步已渲染计数，并自动触发这批项目的翻译
+        self._discover_rendered = len(queue)
+        self._translate_visible_batch(queue, self.repo_list, 0)
 
 
 def _render_trending_items_batched(self, repos):
@@ -115,6 +124,7 @@ def _render_trending_items_batched(self, repos):
     self._display_trending_items = list(repos)
     self._trending_batch_queue = list(repos)
     self._trending_batch_index = 0
+    self._trending_rendered = 0  # 与本页滚动加载计数对齐，渲染完成后由 _render_trending_batch 收尾
     self._render_trending_batch()
     self._update_list_summary()
 
@@ -145,6 +155,10 @@ def _render_trending_batch(self):
     self._trending_batch_index = idx
     if idx < len(queue):
         QTimer.singleShot(16, self._render_trending_batch)
+    else:
+        # 本批全部渲染完成：同步已渲染计数，并自动触发这批项目的翻译
+        self._trending_rendered = len(queue)
+        self._translate_visible_batch(queue, self.trending_list, 0)
 
 
 MainWindow._render_discover_items = _render_discover_items_batched

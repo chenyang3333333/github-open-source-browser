@@ -8,14 +8,17 @@ from typing import Any
 
 from PyQt6.QtCore import QThreadPool, Qt
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -23,10 +26,11 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
-    QDialog,
-    QScrollArea,
     QWidget,
+    QScrollArea,
 )
 
 from github_open_source_browser.config import (
@@ -108,42 +112,17 @@ class SettingsDialog(QDialog):
         translation_layout.setContentsMargins(8, 8, 8, 8)
         translation_scroll.setWidget(translation_tab)
 
-        # 翻译供应商
-        self.translation_provider_combo = QComboBox()
-        for label, value in _TRANSLATION_PROVIDER_OPTIONS:
-            self.translation_provider_combo.addItem(label, value)
-        translation_layout.addRow(tr("settings.trans_service"), self.translation_provider_combo)
-
-        # 翻译语言
+        # 翻译语言（置顶）
         self.target_lang_combo = QComboBox()
         for label, value in TARGET_LANGUAGE_DISPLAY_OPTIONS:
             self.target_lang_combo.addItem(label, value)
         translation_layout.addRow(tr("settings.trans_lang"), self.target_lang_combo)
 
-        # API 设置
-        self.translation_api_url_edit = QLineEdit()
-        self.translation_api_url_edit.setPlaceholderText(tr("placeholder.api_url"))
-        translation_layout.addRow(tr("settings.api_url"), self.translation_api_url_edit)
-
-        self.translation_api_key_edit = QLineEdit()
-        self.translation_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.translation_api_key_edit.setPlaceholderText(tr("settings.api_key"))
-        translation_layout.addRow(tr("settings.api_key"), self.translation_api_key_edit)
-
-        self.translation_model_edit = QComboBox()
-        self.translation_model_edit.setEditable(False)
-        self.translation_model_edit.setPlaceholderText(tr("placeholder.model"))
-        self.translation_model_edit.setMinimumWidth(200)
-        self._model_label = QLabel(tr("settings.model"))
-        model_row = QHBoxLayout()
-        model_row.addWidget(self.translation_model_edit, 1)
-        self.fetch_models_btn = QPushButton(tr("settings.fetch_models"))
-        self.fetch_models_btn.setFixedWidth(80)
-        self.fetch_models_btn.clicked.connect(self._fetch_models)
-        model_row.addWidget(self.fetch_models_btn)
-        translation_layout.addRow(self._model_label, model_row)
-
-        # 腾讯云
+        # 翻译供应商
+        self.translation_provider_combo = QComboBox()
+        for label, value in _TRANSLATION_PROVIDER_OPTIONS:
+            self.translation_provider_combo.addItem(label, value)
+        translation_layout.addRow(tr("settings.trans_service"), self.translation_provider_combo)
 
         # 超时和重试
         self.translation_timeout_spin = QDoubleSpinBox()
@@ -162,17 +141,37 @@ class SettingsDialog(QDialog):
         self.translation_cache_checkbox = QCheckBox(tr("settings.cache_enabled"))
         translation_layout.addRow(tr("settings.cache"), self.translation_cache_checkbox)
 
-        # 缓存统计
+        # 缓存统计（打开设置时自动刷新真实数据）
         self.translation_cache_stats = QLabel("0 条，0 B")
         translation_layout.addRow(tr("settings.cache_stats"), self.translation_cache_stats)
 
         cache_row = QHBoxLayout()
+        self.view_cache_btn = QPushButton(tr("settings.view_cache"))
+        self.view_cache_btn.clicked.connect(self._open_cache_manager)
+        cache_row.addWidget(self.view_cache_btn)
         self.clear_cache_btn = QPushButton(tr("settings.clear_cache"))
-        self.clear_cache_btn
         self.clear_cache_btn.clicked.connect(self._clear_translation_cache)
         cache_row.addWidget(self.clear_cache_btn)
         cache_row.addStretch()
         translation_layout.addRow("", cache_row)
+
+        # 翻译记忆库（代理翻译结果自动沉淀，可离线复用）
+        self.translation_memory_stats = QLabel("0 条")
+        translation_layout.addRow(tr("settings.memory_stats"), self.translation_memory_stats)
+
+        memory_row = QHBoxLayout()
+        self.view_memory_btn = QPushButton(tr("settings.view_memory"))
+        self.view_memory_btn.clicked.connect(self._open_memory_manager)
+        memory_row.addWidget(self.view_memory_btn)
+        self.clear_memory_btn = QPushButton(tr("settings.clear_memory"))
+        self.clear_memory_btn.clicked.connect(self._clear_translation_memory)
+        memory_row.addWidget(self.clear_memory_btn)
+        memory_row.addStretch()
+        translation_layout.addRow("", memory_row)
+
+        # 已学习词汇（代理翻译后自动收录的新词）
+        self.learned_terms_stats = QLabel("0 个")
+        translation_layout.addRow(tr("settings.learned_terms"), self.learned_terms_stats)
 
         # Translation scope
         scope_label = QLabel(tr("settings.translate_scope"))
@@ -200,20 +199,6 @@ class SettingsDialog(QDialog):
         self.concurrent_limit_spin.setRange(1, 10)
         self.concurrent_limit_spin.setMinimumWidth(120)
         translation_layout.addRow(tr("settings.concurrent_limit"), self.concurrent_limit_spin)
-
-        # 密钥操作
-        key_row = QHBoxLayout()
-        self.key_show_btn = QPushButton(tr("btn.show"))
-        self.key_show_btn.clicked.connect(lambda: self.translation_api_key_edit.setEchoMode(QLineEdit.EchoMode.Normal))
-        key_row.addWidget(self.key_show_btn)
-        self.key_hide_btn = QPushButton(tr("btn.hide"))
-        self.key_hide_btn.clicked.connect(lambda: self.translation_api_key_edit.setEchoMode(QLineEdit.EchoMode.Password))
-        key_row.addWidget(self.key_hide_btn)
-        self.key_clear_btn = QPushButton(tr("btn.clear_key"))
-        self.key_clear_btn.clicked.connect(lambda: self.translation_api_key_edit.clear())
-        key_row.addWidget(self.key_clear_btn)
-        key_row.addStretch()
-        translation_layout.addRow(tr("settings.key_management"), key_row)
 
         # 测试按钮
         self.translation_test_button = QPushButton(tr("btn.test_translation"))
@@ -391,7 +376,6 @@ class SettingsDialog(QDialog):
 
         # 信号
         self.proxy_mode_combo.currentIndexChanged.connect(self._refresh_proxy_visibility)
-        self.translation_provider_combo.currentIndexChanged.connect(self._refresh_translation_visibility)
 
     def _load_config(self):
         config = self.config
@@ -404,19 +388,6 @@ class SettingsDialog(QDialog):
         idx = self.target_lang_combo.findData(lang)
         if idx >= 0:
             self.target_lang_combo.setCurrentIndex(idx)
-        self.translation_api_url_edit.setText(str(config.get("translation_api_url", "")))
-        self.translation_api_key_edit.setText(str(config.get("translation_api_key", "")))
-        model_val = str(config.get("translation_model", ""))
-        if model_val:
-            idx = self.translation_model_edit.findText(model_val)
-            if idx >= 0:
-                self.translation_model_edit.setCurrentIndex(idx)
-            else:
-                self.translation_model_edit.addItem(model_val)
-                self.translation_model_edit.setCurrentIndex(self.translation_model_edit.count() - 1)
-        else:
-            self.translation_model_edit.setCurrentIndex(-1)
-
         self.translation_timeout_spin.setValue(config.get("translation_timeout_seconds", 12.0))
         self.translation_retry_spin.setValue(config.get("translation_retry_count", 1))
         self.translation_cache_checkbox.setChecked(config.get("translation_cache_enabled", True))
@@ -464,7 +435,7 @@ class SettingsDialog(QDialog):
         if hasattr(self, 'concurrent_limit_spin'):
             self.concurrent_limit_spin.setValue(config.get("concurrent_limit", 3))
         self._refresh_proxy_visibility()
-        self._refresh_translation_visibility()
+        self._refresh_cache_stats()
         self._load_diagnostics()
         # Deselect all spinbox text after loading
         self._deselect_spinboxes()
@@ -536,14 +507,62 @@ class SettingsDialog(QDialog):
         service = getattr(self, 'service', None)
         if service and hasattr(service, 'db'):
             try:
-                service.db.clear_cache()
-                self.translation_cache_stats.setText("0 条，0 B")
+                service.db.clear_translation_cache()
+                self._refresh_cache_stats()
                 self.status_label.setText(tr("settings.cache_cleared"))
             except Exception:
                 self.status_label.setText(tr("settings.cache_clear_failed"))
 
+    def _clear_translation_memory(self):
+        service = getattr(self, 'service', None)
+        if service and hasattr(service, 'db'):
+            try:
+                service.db.clear_translation_memory()
+                service.db.clear_learned_terms()
+                self._refresh_cache_stats()
+                self.status_label.setText(tr("settings.memory_cleared"))
+            except Exception:
+                self.status_label.setText(tr("settings.memory_clear_failed"))
+
+    def _refresh_cache_stats(self):
+        """刷新缓存统计、记忆库与已学习词汇的显示数据。"""
+        service = getattr(self, 'service', None)
+        if not service or not hasattr(service, 'db'):
+            return
+        try:
+            stats = service.db.get_translation_cache_stats()
+            kb = stats.get('bytes', 0) / 1024.0
+            if kb >= 1024:
+                size_text = f"{kb / 1024.0:.1f} MB"
+            else:
+                size_text = f"{kb:.1f} KB"
+            enabled = self.config.get("translation_cache_enabled", True)
+            state = tr("settings.cache_enabled") if enabled else tr("settings.cache_disabled")
+            self.translation_cache_stats.setText(f"{stats.get('count', 0)} 条，{size_text}（{state}）")
+            memory = service.db.get_translation_memory_stats()
+            self.translation_memory_stats.setText(f"{memory.get('count', 0)} 条（累计命中 {memory.get('hits', 0)} 次）")
+            self.learned_terms_stats.setText(f"{service.db.get_learned_terms_count()} 个")
+        except Exception:
+            pass
+
+    def _open_cache_manager(self):
+        """打开翻译缓存明细管理对话框。"""
+        service = getattr(self, 'service', None)
+        if not service or not hasattr(service, 'db'):
+            return
+        dlg = _DataTableDialog(service.db, "cache", self)
+        dlg.exec()
+
+    def _open_memory_manager(self):
+        """打开翻译记忆库与已学习词汇管理对话框。"""
+        service = getattr(self, 'service', None)
+        if not service or not hasattr(service, 'db'):
+            return
+        dlg = _DataTableDialog(service.db, "memory", self)
+        dlg.exec()
+
     def _open_plugin_dir(self):
-        import os, subprocess
+        import os, subprocess, sys
         plugin_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), 'user_plugins')
         os.makedirs(plugin_dir, exist_ok=True)
         if sys.platform == 'win32':
@@ -555,10 +574,6 @@ class SettingsDialog(QDialog):
         config = self.config
         config["translation_provider"] = normalize_translation_provider(self.translation_provider_combo.currentData())
         config["target_language"] = normalize_target_language(self.target_lang_combo.currentData())
-        config["translation_api_url"] = self.translation_api_url_edit.text().strip()
-        config["translation_api_key"] = self.translation_api_key_edit.text().strip()
-        config["translation_model"] = self.translation_model_edit.currentText().strip()
-
         config["translation_timeout_seconds"] = self.translation_timeout_spin.value()
         config["translation_retry_count"] = self.translation_retry_spin.value()
         config["translation_cache_enabled"] = self.translation_cache_checkbox.isChecked()
@@ -648,150 +663,8 @@ class SettingsDialog(QDialog):
         except Exception:
             pass
 
-    # Known default models for providers that don't have a /models endpoint
-    _KNOWN_MODELS = {
-        "claude": [
-            "claude-sonnet-4-20250514",
-            "claude-3-5-haiku-20241022",
-            "claude-3-opus-20240229",
-            "claude-3-5-sonnet-20241022",
-        ],
-        "gemini": [
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
-            "gemini-2.0-flash-exp",
-            "gemini-pro",
-        ],
-        "mimo": [
-            "mimo-v2.5",
-            "mimo-v2.5-pro",
-            "mimo-v2.5-asr",
-            "mimo-v2.5-tts",
-            "mimo-v2.5-tts-voiceclone",
-            "mimo-v2.5-tts-voicedesign",
-        ],
-        "openai_compatible": [
-            "gpt-4o",
-            "gpt-4o-mini",
-            "gpt-4-turbo",
-            "gpt-3.5-turbo",
-            "deepseek-chat",
-            "deepseek-reasoner",
-            "qwen-plus",
-            "qwen-turbo",
-            "glm-4",
-        ],
-    }
-
-    _PROVIDER_DEFAULT_URLS = {
-        "openai_compatible": "https://api.openai.com/v1",
-        "claude": "https://api.anthropic.com",
-        "gemini": "https://generativelanguage.googleapis.com",
-        "mimo": "https://api.xiaomimimo.com/v1",
-    }
-
-    def _fetch_models(self):
-        """Fetch available models from API or use built-in list."""
-        provider = self.translation_provider_combo.currentData() or "auto"
-        api_url = self.translation_api_url_edit.text().strip()
-        api_key = self.translation_api_key_edit.text().strip()
-
-        # Use default URL if empty
-        if not api_url:
-            api_url = self._PROVIDER_DEFAULT_URLS.get(provider, "")
-
-        # For providers without API or without key, show known models directly
-        if not api_url or not api_key:
-            known = self._KNOWN_MODELS.get(provider, [])
-            if known:
-                self._apply_model_list(known)
-                self.status_label.setText(tr("settings.models_found", count=len(known)) + " (builtin)")
-            else:
-                self.status_label.setText(tr("settings.need_api_url"))
-            return
-
-        self.fetch_models_btn.setEnabled(False)
-        self.status_label.setText(tr("settings.fetching_models"))
-
-        def task():
-            import requests as req
-            models = []
-            if provider == "claude":
-                models = list(self._KNOWN_MODELS.get("claude", []))
-            elif provider == "gemini":
-                resp = req.get(
-                    f"{api_url.rstrip('/')}/v1beta/models",
-                    params={"key": api_key},
-                    timeout=10,
-                )
-                resp.raise_for_status()
-                for m in resp.json().get("models", []):
-                    name = m.get("name", "").split("/")[-1]
-                    if name:
-                        models.append(name)
-            else:
-                # OpenAI-compatible (covers openai, deepseek, qwen, mimo, etc.)
-                resp = req.get(
-                    f"{api_url.rstrip('/')}/models",
-                    headers={"Authorization": f"Bearer {api_key}"},
-                    timeout=10,
-                )
-                resp.raise_for_status()
-                for m in resp.json().get("data", []):
-                    mid = m.get("id", "")
-                    if mid:
-                        models.append(mid)
-            return models
-
-        def on_done(models):
-            self.fetch_models_btn.setEnabled(True)
-            if models:
-                self._apply_model_list(models)
-                self.status_label.setText(tr("settings.models_found", count=len(models)))
-            else:
-                # Fallback to known models
-                known = self._KNOWN_MODELS.get(provider, [])
-                if known:
-                    self._apply_model_list(known)
-                    self.status_label.setText(tr("settings.models_found", count=len(known)) + " (builtin)")
-                else:
-                    self.status_label.setText(tr("settings.no_models"))
-
-        def on_error(msg):
-            self.fetch_models_btn.setEnabled(True)
-            # Fallback to known models on error
-            known = self._KNOWN_MODELS.get(provider, [])
-            if known:
-                self._apply_model_list(known)
-                self.status_label.setText(tr("settings.models_found", count=len(known)) + " (builtin)")
-            else:
-                self.status_label.setText(tr("settings.fetch_models_failed", msg=str(msg)))
-
-        from github_open_source_browser.ui.main_window import Worker
-        worker = Worker(task)
-        worker.signals.result.connect(on_done)
-        worker.signals.error.connect(on_error)
-        QThreadPool.globalInstance().start(worker)
-
-    def _apply_model_list(self, models):
-        """Apply model list to combo box."""
-        current = self.translation_model_edit.currentText().strip()
-        self.translation_model_edit.clear()
-        for m in models[:50]:
-            self.translation_model_edit.addItem(m)
-        if current:
-            idx = self.translation_model_edit.findText(current)
-            if idx >= 0:
-                self.translation_model_edit.setCurrentIndex(idx)
-            else:
-                self.translation_model_edit.addItem(current)
-                self.translation_model_edit.setCurrentIndex(self.translation_model_edit.count() - 1)
-        elif models:
-            self.translation_model_edit.setCurrentIndex(0)
-        self.status_label.setText(tr("settings.models_found", count=len(models)))
-
     def _restore_defaults(self):
-        protected_keys = {"github_token", "oauth_client_id", "translation_api_key", "favorites", "download_history"}
+        protected_keys = {"github_token", "oauth_client_id", "favorites", "download_history"}
         current = dict(self.config)
         import copy
         defaults = copy.deepcopy(DEFAULT_CONFIG)
@@ -813,7 +686,7 @@ class SettingsDialog(QDialog):
             imported = data.get("settings", data)
             if not isinstance(imported, dict):
                 raise ValueError(tr("settings.file_format_error"))
-            protected = {"github_token", "oauth_client_id", "translation_api_key", "favorites", "download_history"}
+            protected = {"github_token", "oauth_client_id", "favorites", "download_history"}
             for key, value in imported.items():
                 if key not in protected:
                     self.config[key] = value
@@ -831,7 +704,7 @@ class SettingsDialog(QDialog):
             import json
             import copy
             from pathlib import Path
-            secret_keys = {"github_token", "oauth_client_id", "translation_api_key", "favorites", "download_history"}
+            secret_keys = {"github_token", "oauth_client_id", "favorites", "download_history"}
             payload = {k: copy.deepcopy(v) for k, v in self.config.items() if k not in secret_keys}
             Path(path).write_text(
                 json.dumps({"format": "github-open-source-browser-settings", "version": 1, "settings": payload}, ensure_ascii=False, indent=2),
@@ -886,27 +759,191 @@ class SettingsDialog(QDialog):
         }
         self.proxy_mode_help.setText(help_text.get(mode, ""))
 
-    def _refresh_translation_visibility(self):
-        provider = self.translation_provider_combo.currentData() or "auto"
-        show_api = provider not in ("auto", "local")
-        self.translation_api_url_edit.setVisible(show_api)
-        self.translation_api_key_edit.setVisible(show_api)
-        show_model = provider in ("openai_compatible", "claude", "gemini", "mimo")
-        # Show/hide model row by hiding the combo and button individually
-        # Show/hide model row
-        model_label = getattr(self, '_model_label', None)
-        if model_label:
-            model_label.setVisible(show_model)
-        self.translation_model_edit.setVisible(show_model)
-        if hasattr(self, 'fetch_models_btn'):
-            self.fetch_models_btn.setVisible(show_model)
-        if hasattr(self, "fetch_models_btn"):
-            self.fetch_models_btn.setVisible(show_model)
-        # Update API key placeholder based on provider
-        if provider == "tencent":
-            self.translation_api_key_edit.setPlaceholderText("SecretId:SecretKey")
-            self.translation_api_url_edit.setPlaceholderText(tr("settings.tencent_url_hint"))
-        else:
-            self.translation_api_key_edit.setPlaceholderText(tr("placeholder.api_key"))
-            self.translation_api_url_edit.setPlaceholderText(tr("placeholder.api_url"))
+
+class _DataTableDialog(QDialog):
+    """数据明细管理对话框：以表格查看翻译缓存 / 翻译记忆库 / 已学习词汇，
+    支持刷新、删除选中、清空操作。"""
+
+    _MODE_SPECS = {
+        "cache": {
+            "title": "cache.title",
+            "headers": ("cache.col_key", "cache.col_value", "cache.col_size", "cache.col_time"),
+            "key": "key",
+            "label": "cache.title",
+        },
+        "memory": {
+            "title": "memory.title",
+            "headers": ("cache.col_key", "cache.col_value", "cache.col_hits", "cache.col_time"),
+            "key": "id",
+            "label": "memory.title",
+        },
+        "terms": {
+            "title": "terms.title",
+            "headers": ("cache.col_term", "cache.col_sample", "cache.col_value", "cache.col_time"),
+            "key": "term",
+            "label": "terms.title",
+        },
+    }
+
+    def __init__(self, db, mode: str = "memory", parent=None):
+        super().__init__(parent)
+        self._db = db
+        self.setWindowTitle(tr(self._MODE_SPECS.get(mode, self._MODE_SPECS["memory"])["title"]))
+        self.setMinimumSize(720, 480)
+        self.resize(780, 520)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+
+        self._tabs = QTabWidget()
+        layout.addWidget(self._tabs, 1)
+        self._tables: dict[str, QTableWidget] = {}
+        self._tab_modes: list[str] = []
+        if mode == "cache":
+            self._add_cache_tab()
+        for tab_mode in ("memory", "terms"):
+            spec = self._MODE_SPECS[tab_mode]
+            page = QWidget()
+            page_layout = QVBoxLayout(page)
+            page_layout.setContentsMargins(0, 0, 0, 0)
+            table = QTableWidget(0, len(spec["headers"]))
+            table.setHorizontalHeaderLabels([tr(h) for h in spec["headers"]])
+            table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+            table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+            table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+            table.verticalHeader().setVisible(False)
+            table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+            table.horizontalHeader().setStretchLastSection(True)
+            table.setAlternatingRowColors(True)
+            page_layout.addWidget(table)
+            self._tables[tab_mode] = table
+            self._tab_modes.append(tab_mode)
+            self._tabs.addTab(page, tr(spec["title"]))
+
+        # 操作按钮
+        btn_row = QHBoxLayout()
+        self.refresh_btn = QPushButton(tr("btn.refresh"))
+        self.refresh_btn.clicked.connect(self._reload_current)
+        btn_row.addWidget(self.refresh_btn)
+        self.delete_btn = QPushButton(tr("btn.delete_selected"))
+        self.delete_btn.clicked.connect(self._delete_selected)
+        btn_row.addWidget(self.delete_btn)
+        self.clear_btn = QPushButton(tr("settings.clear_all"))
+        self.clear_btn.clicked.connect(self._clear_all)
+        btn_row.addWidget(self.clear_btn)
+        btn_row.addStretch()
+        close_btn = QPushButton(tr("btn.close"))
+        close_btn.clicked.connect(self.close)
+        btn_row.addWidget(close_btn)
+        layout.addLayout(btn_row)
+
+        self._tabs.currentChanged.connect(lambda _: self._reload_current())
+        self._reload_current()
+
+    def _add_cache_tab(self):
+        spec = self._MODE_SPECS["cache"]
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(0, 0, 0, 0)
+        table = QTableWidget(0, len(spec["headers"]))
+        table.setHorizontalHeaderLabels([tr(h) for h in spec["headers"]])
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        table.verticalHeader().setVisible(False)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setAlternatingRowColors(True)
+        page_layout.addWidget(table)
+        self._tables["cache"] = table
+        self._tab_modes.append("cache")
+        self._tabs.insertTab(0, page, tr(spec["title"]))
+
+    def _current_mode(self) -> str:
+        idx = self._tabs.currentIndex()
+        if 0 <= idx < len(self._tab_modes):
+            return self._tab_modes[idx]
+        return "memory"
+
+    def _reload_current(self):
+        mode = self._current_mode()
+        table = self._tables[mode]
+        table.setRowCount(0)
+        try:
+            if mode == "cache":
+                rows = self._db.list_translation_cache(500)
+                data = [
+                    (r["key"], r["value"], f"{r['size']} B", r.get("updated_at") or "")
+                    for r in rows
+                ]
+                keys = [r["key"] for r in rows]
+            elif mode == "memory":
+                rows = self._db.list_translation_memory(500)
+                data = [
+                    (r["source"], r["translated"], str(r["hits"]), r.get("updated_at") or "")
+                    for r in rows
+                ]
+                keys = [r["id"] for r in rows]
+            else:
+                rows = self._db.list_learned_terms(500)
+                data = [
+                    (r["term"], r.get("sample_source") or "", r.get("sample_translated") or "", r.get("updated_at") or "")
+                    for r in rows
+                ]
+                keys = [r["term"] for r in rows]
+        except Exception:
+            return
+        for row_idx, (values, key) in enumerate(zip(data, keys)):
+            table.insertRow(row_idx)
+            for col_idx, value in enumerate(values):
+                item = QTableWidgetItem(str(value)[:200])
+                item.setData(Qt.ItemDataRole.UserRole, key)
+                table.setItem(row_idx, col_idx, item)
+
+    def _selected_keys(self) -> list:
+        mode = self._current_mode()
+        table = self._tables[mode]
+        keys = []
+        for item in table.selectedItems():
+            if item.column() == 0:
+                key = item.data(Qt.ItemDataRole.UserRole)
+                if key not in keys:
+                    keys.append(key)
+        return keys
+
+    def _delete_selected(self):
+        mode = self._current_mode()
+        keys = self._selected_keys()
+        if not keys:
+            self.status_label_set(tr("cache.none_selected"))
+            return
+        try:
+            if mode == "cache":
+                self._db.delete_translation_cache(keys)
+            elif mode == "memory":
+                self._db.delete_translation_memory(keys)
+            else:
+                self._db.delete_learned_terms(keys)
+            self._reload_current()
+        except Exception:
+            pass
+
+    def _clear_all(self):
+        mode = self._current_mode()
+        if QMessageBox.question(self, tr("settings.title"), tr("settings.cache_clear_confirm")) != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            if mode == "cache":
+                self._db.clear_translation_cache()
+            elif mode == "memory":
+                self._db.clear_translation_memory()
+            else:
+                self._db.clear_learned_terms()
+            self._reload_current()
+        except Exception:
+            pass
+
+    def status_label_set(self, text: str):
+        """对话框内无状态栏时直接忽略（保持接口一致，便于扩展）。"""
+        pass
 

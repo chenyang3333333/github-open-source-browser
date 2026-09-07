@@ -1,27 +1,16 @@
 # -*- coding: utf-8 -*-
-"""翻译模块：markdown 占位保护与腾讯云 TC3 签名等自包含逻辑。
+"""翻译模块：markdown 占位保护、术语表与本地词典等自包含逻辑。
 
 从 main.py 抽出，便于独立维护与测试。只依赖标准库，不依赖应用主模块。
 """
 
-import datetime as _datetime
-import hashlib as _hashlib
-import hmac as _hmac
-import json as _json
 import re as _re
-import time as _time
 
 # ---------------------------------------------------------------------------
 # Markdown 占位保护层
 # 翻译前把代码块、HTML、URL 等替换为不可翻译占位符，翻译后原样恢复，
 # 避免第三方翻译接口破坏格式、翻译代码或丢失链接。
 # ---------------------------------------------------------------------------
-
-# 当前占位符（3 位字母序号，实测腾讯翻译不会拆分纯字母串）
-PLACEHOLDER_RESIDUAL = _re.compile(r"ZXQPH[A-Z]{3}TK")
-
-# 旧版字节码内部占位符（ZXQGOSB{n}TOKEN）被腾讯拆成带空格后恢复失败而残留
-LEGACY_PLACEHOLDER_RESIDUAL = _re.compile(r"ZXQGOSB\s*\d+\s*TOKEN")
 
 
 def placeholder_token(index: int) -> str:
@@ -70,11 +59,6 @@ def restore_markdown_blocks(translated_text: str, mappings: list[str]) -> str:
     for index, original in enumerate(mappings):
         result = result.replace(placeholder_token(index), original)
     return result
-
-
-def protect_markdown_fragment_noop(text, state) -> str:
-    """关闭旧版字节码内部 ZXQGOSB 占位保护（已被外层保护层取代）。"""
-    return str(text or "")
 
 
 # ---------------------------------------------------------------------------
@@ -1823,6 +1807,187 @@ LOCAL_TRANSLATION_DICT = {
     "purple": "紫",
     "pink": "粉",
     "brown": "棕",
+    # 项目描述高频词汇（扩充）
+    "awesome": "精选",
+    "curated": "精选的",
+    "tutorial": "教程",
+    "guide": "指南",
+    "walkthrough": "入门教程",
+    "examples": "示例",
+    "example": "示例",
+    "demo": "演示",
+    "sample": "样例",
+    "showcase": "作品展示",
+    "scaffolding": "脚手架",
+    "generator": "生成器",
+    "viewer": "查看器",
+    "editor": "编辑器",
+    "explorer": "资源管理器",
+    "manager": "管理器",
+    "organizer": "管理器",
+    "tracker": "追踪器",
+    "monitor": "监视器",
+    "notifier": "通知器",
+    "updater": "更新程序",
+    "installer": "安装程序",
+    "uninstaller": "卸载程序",
+    "registry": "注册表",
+    "terminal": "终端",
+    "console": "控制台",
+    "shell": "命令行",
+    "completion": "补全",
+    "autocomplete": "自动补全",
+    "highlight": "高亮",
+    "colorize": "着色",
+    "theme": "主题",
+    "palette": "调色板",
+    "icons": "图标",
+    "fonts": "字体",
+    "emoji": "表情符号",
+    "dashboard": "仪表盘",
+    "panel": "面板",
+    "widget": "小部件",
+    "tooltip": "提示框",
+    "popup": "弹窗",
+    "overlay": "浮层",
+    "badge": "徽章",
+    "banner": "横幅",
+    "footer": "页脚",
+    "sidebar": "侧边栏",
+    "navbar": "导航栏",
+    "toolbar": "工具栏",
+    "menubar": "菜单栏",
+    "statusbar": "状态栏",
+    "responsive": "响应式",
+    "adaptive": "自适应",
+    "fluid": "流式",
+    "sticky": "粘性",
+    "scroll": "滚动",
+    "drag": "拖拽",
+    "resize": "调整大小",
+    "zoom": "缩放",
+    "pan": "平移",
+    "rotate": "旋转",
+    "flip": "翻转",
+    "crop": "裁剪",
+    "thumbnail": "缩略图",
+    "preview": "预览",
+    "render": "渲染",
+    "rasterize": "栅格化",
+    "vectorize": "矢量化",
+    "animate": "动画",
+    "transition": "过渡",
+    "keyframe": "关键帧",
+    "easing": "缓动",
+    "particle": "粒子",
+    "shader": "着色器",
+    "texture": "纹理",
+    "sprite": "精灵",
+    "tile": "瓦片",
+    "atlas": "图集",
+    "raycast": "射线检测",
+    "collider": "碰撞体",
+    "physics": "物理",
+    "gravity": "重力",
+    "momentum": "动量",
+    "friction": "摩擦力",
+    "trajectory": "轨迹",
+    "projectile": "抛射物",
+    "hitbox": "命中框",
+    "spawn": "生成",
+    "respawn": "重生",
+    "checkpoint": "检查点",
+    "savegame": "存档",
+    "achievement": "成就",
+    "leaderboard": "排行榜",
+    "matchmaking": "匹配",
+    "tournament": "锦标赛",
+    "esports": "电竞",
+    "speedrun": "速通",
+    "cheat": "作弊",
+    "mod": "模组",
+    "dlc": "可下载内容",
+    "expansion": "扩展包",
+    "remaster": "重制版",
+    "remake": "重制",
+    "localization": "本地化",
+    "internationalization": "国际化",
+    "translation": "翻译",
+    "subtitles": "字幕",
+    "dubbing": "配音",
+    "voiceover": "旁白",
+    "narration": "解说",
+    "dialogue": "对话",
+    "cutscene": "过场动画",
+    "cinematic": "电影化",
+    "teaser": "预告",
+    "trailer": "预告片",
+    "screenshot": "截图",
+    "recording": "录制",
+    "playlist": "播放列表",
+    "chapter": "章节",
+    "episode": "剧集",
+    "season": "季",
+    "ending": "结局",
+    "bonus": "奖励",
+    "reward": "奖励",
+    "unlock": "解锁",
+    "trophy": "奖杯",
+    "bronze": "青铜",
+    "silver": "白银",
+    "gold": "黄金",
+    "rank": "排名",
+    "rating": "评分",
+    "metacritic": "Metacritic",
+    "aggregator": "聚合器",
+    "catalog": "目录",
+    "encyclopedia": "百科",
+    "forum": "论坛",
+    "moderation": "审核",
+    "report": "举报",
+    "appeal": "申诉",
+    "feedback": "反馈",
+    "roadmap": "路线图",
+    "prerelease": "预发布",
+    "perf": "性能",
+    "instrumentation": "插桩",
+    "metrics": "指标",
+    "telemetry": "遥测",
+    "observability": "可观测性",
+    "incident": "事件",
+    "runbook": "运行手册",
+    "playbook": "剧本",
+    "checklist": "检查清单",
+    "docs": "文档",
+    "documentation": "文档",
+    "conduct": "行为准则",
+    "terms": "条款",
+    "policy": "政策",
+    "governance": "治理",
+    "risk": "风险",
+    "threat": "威胁",
+    "advisory": "公告",
+    "disclosure": "披露",
+    "phishing": "钓鱼",
+    "spam": "垃圾信息",
+    "firewall": "防火墙",
+    "antivirus": "杀毒软件",
+    "sandbox": "沙箱",
+    "honeypot": "蜜罐",
+    "forensics": "取证",
+    "hashing": "哈希",
+    "crypto": "密码学",
+    "plaintext": "明文",
+    "ciphertext": "密文",
+    "handshake": "握手",
+    "renegotiation": "重新协商",
+    "secrecy": "保密性",
+    "authenticity": "真实性",
+    "integrity": "完整性",
+    "confidentiality": "机密性",
+    "encryption": "加密",
+    "decryption": "解密",
+    "cryptanalysis": "密码分析",
 }
 
 # 预编译本地翻译正则（匹配完整单词，大小写不敏感）
@@ -1848,65 +2013,24 @@ def local_translate(text: str, target: str = "zh-CN") -> str:
 
 
 # ---------------------------------------------------------------------------
-# 腾讯云 TC3-HMAC-SHA256 签名
+# 学习机制辅助：自动收录代理翻译中出现的新词时过滤停用词
 # ---------------------------------------------------------------------------
 
-def tc3_authorization(
-    secret_id: str,
-    secret_key: str,
-    host: str,
-    service_name: str,
-    action: str,
-    version: str,
-    region: str,
-    payload: dict,
-) -> tuple[str, str, str]:
-    """计算腾讯云 TC3 签名。
-
-    返回 (authorization 头, body 字符串, 签名时间戳)，调用方自行组装请求头。
-    仅依赖标准库，行为与原 main.py 内联实现一致。
+# 高频英语停用词（小写），代理翻译后提取新词时忽略，避免词库被噪声词占满
+LEARN_STOPWORDS = frozenset(
     """
-    timestamp = int(_time.time())
-    date = _datetime.datetime.fromtimestamp(timestamp, tz=_datetime.timezone.utc).strftime("%Y-%m-%d")
-    body = _json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-    hashed_payload = _hashlib.sha256(body.encode("utf-8")).hexdigest()
-    canonical_headers = "content-type:application/json; charset=utf-8\nhost:" + host + "\n"
-    signed_headers = "content-type;host"
-    canonical_request = "\n".join(
-        ("POST", "/", "", canonical_headers, signed_headers, hashed_payload)
-    )
-    credential_scope = f"{date}/{service_name}/tc3_request"
-    string_to_sign = "\n".join(
-        (
-            "TC3-HMAC-SHA256",
-            str(timestamp),
-            credential_scope,
-            _hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
-        )
-    )
-    secret_date = _hmac.new(
-        ("TC3" + secret_key).encode("utf-8"),
-        date.encode("utf-8"),
-        _hashlib.sha256,
-    ).digest()
-    secret_service = _hmac.new(
-        secret_date,
-        service_name.encode("utf-8"),
-        _hashlib.sha256,
-    ).digest()
-    secret_signing = _hmac.new(
-        secret_service,
-        b"tc3_request",
-        _hashlib.sha256,
-    ).digest()
-    signature = _hmac.new(
-        secret_signing,
-        string_to_sign.encode("utf-8"),
-        _hashlib.sha256,
-    ).hexdigest()
-    authorization = (
-        "TC3-HMAC-SHA256 "
-        f"Credential={secret_id}/{credential_scope}, "
-        f"SignedHeaders={signed_headers}, Signature={signature}"
-    )
-    return authorization, body, str(timestamp)
+a an and or but if then than that this these those the of in on at by for with
+from to into onto over under through during before after between among about
+as is are was were be been being am do does did doing have has had having will
+would shall should can could may might must not no nor so such only just very
+too also more most less least other another any some each every both all own
+same new old way when where why how what which who whom whose while because
+since until unless once after before up down out off again further then once
+here there hereafter hereby herein hereupon herewith thereafter thereby
+therefore therein thereof thereupon thus whereafter whereas whereby wherein
+whereupon your yours yourself yourselves he his him himself she her hers
+herself it its itself they them their theirs themselves we us our ours
+ourselves i me my mine myself you your yours yourself yourselves
+""".split()
+)
+

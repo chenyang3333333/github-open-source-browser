@@ -1,15 +1,30 @@
 import sqlite3
 import os
 import json
+import re
 import threading
 from typing import List, Optional
 from datetime import datetime, timedelta
+
+from github_open_source_browser.translator import (
+    GLOSSARY_TERMS,
+    LEARN_STOPWORDS,
+    LOCAL_TRANSLATION_DICT,
+)
 
 # 翻译缓存策略：超过 TTL 视为过期；条数或总字节超限时惰性清理最旧条目。
 TRANSLATION_CACHE_TTL_SECONDS = 30 * 24 * 3600  # 30 天
 TRANSLATION_CACHE_MAX_ENTRIES = 3000
 TRANSLATION_CACHE_MAX_BYTES = 30 * 1024 * 1024  # 30MB
 TRANSLATION_CACHE_TRIM_RATIO = 0.2  # 超限时删除最旧 20%
+
+# 自动学习时忽略的已知词（本地词典 + 术语表 + 停用词），避免重复收录
+_KNOWN_TERM_LOOKUP = (
+    frozenset(LOCAL_TRANSLATION_DICT.keys())
+    | frozenset(t.lower() for t in GLOSSARY_TERMS)
+    | frozenset(LEARN_STOPWORDS)
+)
+_LEARN_WORD_PATTERN = re.compile(r"[a-zA-Z]{3,}")
 
 
 class Database:
@@ -21,6 +36,15 @@ class Database:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA synchronous=NORMAL")
         self._create_tables()
+        self._existing_learned = self._load_learned_terms()
+
+    def _load_learned_terms(self) -> set:
+        try:
+            cursor = self.conn.cursor()
+            cursor.execute("SELECT term FROM learned_terms")
+            return {row[0] for row in cursor.fetchall()}
+        except Exception:
+            return set()
 
     def _create_tables(self):
         cursor = self.conn.cursor()
@@ -53,6 +77,24 @@ class Database:
             CREATE TABLE IF NOT EXISTS translation_cache (
                 key TEXT PRIMARY KEY,
                 value TEXT,
+                updated_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS translation_memory (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                target TEXT NOT NULL,
+                translated TEXT,
+                hits INTEGER DEFAULT 1,
+                updated_at TEXT,
+                UNIQUE(source, target)
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_source ON translation_memory(source);
+
+            CREATE TABLE IF NOT EXISTS learned_terms (
+                term TEXT PRIMARY KEY,
+                sample_source TEXT,
+                sample_translated TEXT,
                 updated_at TEXT
             );
 
@@ -272,6 +314,201 @@ class Database:
             'count': count,
             'bytes': total_bytes,
         }
+
+    def list_translation_cache(self, limit: int = 200, offset: int = 0) -> List[dict]:
+        """列出翻译缓存条目（最新优先），供缓存管理界面查看。"""
+        limit = max(1, min(int(limit), 500))
+        offset = max(0, int(offset))
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT key, value, updated_at
+                FROM translation_cache
+                ORDER BY updated_at DESC
+                LIMIT ? OFFSET ?
+            ''', (limit, offset))
+            rows = cursor.fetchall()
+        return [
+            {
+                'key': row[0],
+                'value': row[1],
+                'size': len(row[1].encode('utf-8')) if row[1] else 0,
+                'updated_at': row[2],
+            }
+            for row in rows
+        ]
+
+    def delete_translation_cache(self, keys: List[str]) -> int:
+        """按 key 列表删除指定翻译缓存条目，返回删除条数。"""
+        keys = [k for k in (keys or []) if k]
+        if not keys:
+            return 0
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            placeholders = ','.join('?' * len(keys))
+            cursor.execute(f'DELETE FROM translation_cache WHERE key IN ({placeholders})', keys)
+            self.conn.commit()
+            return cursor.rowcount
+
+    # 翻译记忆库（代理翻译结果永久沉淀，无需代理即可复用）
+    def get_translation_memory(self, source: str, target: str) -> Optional[str]:
+        """命中翻译记忆库时返回译文并累加命中次数。"""
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT translated FROM translation_memory
+                WHERE source = ? AND target = ?
+            ''', (source, target))
+            row = cursor.fetchone()
+            if row and row[0]:
+                cursor.execute('''
+                    UPDATE translation_memory SET hits = hits + 1, updated_at = ?
+                    WHERE source = ? AND target = ?
+                ''', (datetime.now().isoformat(), source, target))
+                self.conn.commit()
+                return row[0]
+            return None
+
+    def set_translation_memory(self, source: str, target: str, translated: str) -> None:
+        """保存代理翻译结果到记忆库（source+target 唯一，重复保存时刷新译文与时间）。"""
+        if not source or not translated or source == translated:
+            return
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                INSERT INTO translation_memory (source, target, translated, hits, updated_at)
+                VALUES (?, ?, ?, 1, ?)
+                ON CONFLICT(source, target) DO UPDATE SET
+                    translated = excluded.translated,
+                    hits = hits + 1,
+                    updated_at = excluded.updated_at
+            ''', (source, target, translated, datetime.now().isoformat()))
+            self.conn.commit()
+
+    def list_translation_memory(self, limit: int = 200, offset: int = 0) -> List[dict]:
+        """列出翻译记忆条目（按最近使用排序）。"""
+        limit = max(1, min(int(limit), 500))
+        offset = max(0, int(offset))
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT id, source, target, translated, hits, updated_at
+                FROM translation_memory
+                ORDER BY updated_at DESC
+                LIMIT ? OFFSET ?
+            ''', (limit, offset))
+            rows = cursor.fetchall()
+        return [
+            {
+                'id': row[0],
+                'source': row[1],
+                'target': row[2],
+                'translated': row[3],
+                'hits': row[4],
+                'updated_at': row[5],
+            }
+            for row in rows
+        ]
+
+    def delete_translation_memory(self, ids: List[int]) -> int:
+        """按 id 列表删除翻译记忆条目。"""
+        ids = [int(i) for i in (ids or [])]
+        if not ids:
+            return 0
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            placeholders = ','.join('?' * len(ids))
+            cursor.execute(f'DELETE FROM translation_memory WHERE id IN ({placeholders})', ids)
+            self.conn.commit()
+            return cursor.rowcount
+
+    def clear_translation_memory(self) -> None:
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            cursor.execute('DELETE FROM translation_memory')
+            self.conn.commit()
+
+    def get_translation_memory_stats(self) -> dict:
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT COUNT(*), COALESCE(SUM(hits), 0) FROM translation_memory')
+            count, hits = cursor.fetchone()
+        return {'count': count, 'hits': hits}
+
+    # 学习词表（代理翻译后自动收录的新词）
+    def record_learned_terms(self, source: str, translated: str) -> int:
+        """从代理翻译的源文本中提取不在本地词典/术语表/停用词中的新词并收录。
+        返回本次新增词条数。"""
+        if not source or not translated:
+            return 0
+        sample_source = source[:200]
+        sample_translated = translated[:200]
+        now = datetime.now().isoformat()
+        added = 0
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            for word in _LEARN_WORD_PATTERN.findall(source):
+                key = word.lower()
+                if key in _KNOWN_TERM_LOOKUP or key in self._existing_learned:
+                    continue
+                cursor.execute('''
+                    INSERT OR IGNORE INTO learned_terms (term, sample_source, sample_translated, updated_at)
+                    VALUES (?, ?, ?, ?)
+                ''', (key, sample_source, sample_translated, now))
+                if cursor.rowcount > 0:
+                    self._existing_learned.add(key)
+                    added += 1
+            self.conn.commit()
+        return added
+
+    def get_learned_terms_count(self) -> int:
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM learned_terms')
+            return cursor.fetchone()[0]
+
+    def list_learned_terms(self, limit: int = 200, offset: int = 0) -> List[dict]:
+        limit = max(1, min(int(limit), 500))
+        offset = max(0, int(offset))
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            cursor.execute('''
+                SELECT term, sample_source, sample_translated, updated_at
+                FROM learned_terms
+                ORDER BY updated_at DESC
+                LIMIT ? OFFSET ?
+            ''', (limit, offset))
+            rows = cursor.fetchall()
+        return [
+            {
+                'term': row[0],
+                'sample_source': row[1],
+                'sample_translated': row[2],
+                'updated_at': row[3],
+            }
+            for row in rows
+        ]
+
+    def delete_learned_terms(self, terms: List[str]) -> int:
+        """按词汇名删除指定学习词条。"""
+        terms = [t for t in (terms or []) if t]
+        if not terms:
+            return 0
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            placeholders = ','.join('?' * len(terms))
+            cursor.execute(f'DELETE FROM learned_terms WHERE term IN ({placeholders})', terms)
+            self.conn.commit()
+            for t in terms:
+                self._existing_learned.discard(t)
+            return cursor.rowcount
+
+    def clear_learned_terms(self) -> None:
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            cursor.execute('DELETE FROM learned_terms')
+            self.conn.commit()
+            self._existing_learned.clear()
     # API Cache
     def get_api_cache(self, url: str) -> Optional[str]:
         cursor = self.conn.cursor()
