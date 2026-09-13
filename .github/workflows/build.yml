@@ -27,7 +27,9 @@ jobs:
 
       - name: Build exe
         run: |
-          python -m PyInstaller --noconfirm --clean "GitHub开源浏览器.spec"
+          # Actions 环境 PyInstaller 无法解析中文 spec 文件名（argv 编码问题），先复制为英文名
+          Copy-Item "GitHub开源浏览器.spec" "build-app.spec"
+          python -m PyInstaller --noconfirm --clean "build-app.spec"
 
       - name: Rename exe
         shell: pwsh
