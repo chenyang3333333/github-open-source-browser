@@ -64,9 +64,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "fallback_chain": ["microsoft", "google"],
 }
 
-# 增强配置的默认值（与旧版兼容）
-_ENHANCED_DEFAULT_CONFIG = copy.deepcopy(DEFAULT_CONFIG)
-
 # ---------------------------------------------------------------------------
 # 工具函数
 # ---------------------------------------------------------------------------

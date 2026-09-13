@@ -1,6 +1,5 @@
 {
   "app.title": "GitHub Open Source Browser",
-  "app.version": "2.7.0",
   "app.ready": "Ready",
   "app.loading": "Processing...",
   "window.select_project": "Select a project to view details",

@@ -558,6 +558,11 @@ class MainWindow(QMainWindow):
         self._batch_cancel = True
         self._translate_queue.clear()
         self._translate_anim_timer.stop()
+        # 复位翻译 UI：中断旧详情翻译后恢复按钮与遮罩，避免残留"翻译中"状态
+        self.translate_btn.setEnabled(True)
+        self.translate_btn.setText(tr("btn.translate"))
+        if hasattr(self, '_loading'):
+            self._loading.hide_loading()
         self._batch_translate_total = 0
         self._batch_translate_done = 0
         # 递增翻译代数：中断旧视图的详情/README 加载与翻译，把线程池资源留给新视图
@@ -930,6 +935,8 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(text)
             item.setData(Qt.ItemDataRole.UserRole, repo.get("full_name"))
             self.fav_list.addItem(item)
+        # 收藏页与发现页/趋势页一致，接入列表批量翻译（名称 + 简介）
+        self._translate_visible_batch(repos, self.fav_list, 0)
         self._update_list_summary()
 
     def _repo_list_brief(self, repo: dict) -> str:
@@ -1147,6 +1154,11 @@ class MainWindow(QMainWindow):
         self._translation_gen += 1
         self._detail_translate_deadline = -1.0  # 中断上一个项目的详情翻译（0 表示无限制，负值表示已过期）
         self._translate_anim_timer.stop()
+        # 复位翻译 UI：旧详情翻译被中断后，若新项目未触发自动翻译，按钮/遮罩会永久卡在"翻译中"
+        self.translate_btn.setEnabled(True)
+        self.translate_btn.setText(tr("btn.translate"))
+        if hasattr(self, '_loading'):
+            self._loading.hide_loading()
         self._batch_translate_total = 0
         self._batch_translate_done = 0
         current_gen = self._translation_gen
@@ -1186,7 +1198,6 @@ class MainWindow(QMainWindow):
             try:
                 if not result:
                     return  # 已切换项目/视图，任务被取消，放弃更新
-                print("ON_DONE_ENTER", type(result).__name__, flush=True)
                 readme = result.get("readme", "")
                 release = result.get("release")
                 if readme:
@@ -1206,7 +1217,6 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 import traceback
                 traceback.print_exc()
-                print("ON_DONE_EXC", type(e).__name__, e, flush=True)
 
         def on_error(msg):
             self.status_label.setText(tr("status.detail_failed", msg=msg))
@@ -1702,7 +1712,7 @@ class MainWindow(QMainWindow):
         """Check for new releases of the app itself."""
         def task():
             try:
-                resp = self.service.http.get("https://api.github.com/repos/nicekwell/github-open-source-browser/releases/latest", timeout=5)
+                resp = self.service.http.get("https://api.github.com/repos/chenyang3333333/github-open-source-browser/releases/latest", timeout=5)
                 if resp.status_code == 200:
                     data = resp.json()
                     tag = data.get("tag_name", "")

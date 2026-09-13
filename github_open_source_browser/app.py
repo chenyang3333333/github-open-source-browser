@@ -28,6 +28,7 @@ def _fix_dspin_focus(self, event):
 QSpinBox.focusInEvent = _fix_spin_focus
 QDoubleSpinBox.focusInEvent = _fix_dspin_focus
 
+from github_open_source_browser import __version__
 from github_open_source_browser.config import load_config_file, normalize_config
 from github_open_source_browser.services.github_service import GitHubService
 from github_open_source_browser.ui.main_window import MainWindow
@@ -66,7 +67,7 @@ def main():
 
     app = QApplication(sys.argv)
     app.setApplicationName(tr("app.title"))
-    app.setApplicationVersion(tr("app.version"))
+    app.setApplicationVersion(__version__)
 
     # 图标
     icon_path = Path(__file__).parent / "app.ico"

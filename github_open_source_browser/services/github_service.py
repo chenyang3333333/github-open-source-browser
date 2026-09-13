@@ -578,6 +578,9 @@ class GitHubService:
             b64 = base64.b64encode(resp.content).decode("ascii")
             result = f"data:{content_type};base64,{b64}"
             with self._readme_image_cache_lock:
+                # 简单上限：超过 200 张图片时整体清空，防止字典无限膨胀
+                if len(self._readme_image_cache) >= 200:
+                    self._readme_image_cache.clear()
                 self._readme_image_cache[url] = result
             return result
         except Exception:

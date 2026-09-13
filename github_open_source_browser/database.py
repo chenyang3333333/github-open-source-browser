@@ -4,7 +4,7 @@ import json
 import re
 import threading
 from typing import List, Optional
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from github_open_source_browser.translator import (
     GLOSSARY_TERMS,
@@ -17,6 +17,10 @@ TRANSLATION_CACHE_TTL_SECONDS = 30 * 24 * 3600  # 30 天
 TRANSLATION_CACHE_MAX_ENTRIES = 3000
 TRANSLATION_CACHE_MAX_BYTES = 30 * 1024 * 1024  # 30MB
 TRANSLATION_CACHE_TRIM_RATIO = 0.2  # 超限时删除最旧 20%
+
+# 翻译记忆库：条数超限时惰性删除最旧 20%（记忆库无 TTL，靠条数限制防止无限膨胀）
+TRANSLATION_MEMORY_MAX_ENTRIES = 2000
+TRANSLATION_MEMORY_TRIM_RATIO = 0.2
 
 # 自动学习时忽略的已知词（本地词典 + 术语表 + 停用词），避免重复收录
 _KNOWN_TERM_LOOKUP = (
@@ -127,131 +131,48 @@ class Database:
                 time TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_search_time ON search_history(time DESC);
+
+            CREATE TABLE IF NOT EXISTS ranking_history (
+                since TEXT PRIMARY KEY,
+                data TEXT,
+                updated_at TEXT
+            );
         """)
         self.conn.commit()
 
     def close(self):
         self.conn.close()
 
-    # Search History
-    def add_search(self, keyword: str):
-        if not keyword.strip():
-            return
-        cursor = self.conn.cursor()
-        cursor.execute("INSERT INTO search_history (keyword, time) VALUES (?, ?)", (keyword.strip(), datetime.now().isoformat()))
-        cursor.execute("DELETE FROM search_history WHERE id NOT IN (SELECT id FROM search_history ORDER BY time DESC LIMIT 50)")
-        self.conn.commit()
-
-    def get_recent_searches(self, limit: int = 10) -> List[str]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT DISTINCT keyword FROM search_history ORDER BY time DESC LIMIT ?", (limit,))
-        return [row[0] for row in cursor.fetchall()]
-
-    # Favorites
-    def add_favorite(self, repo: dict):
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT OR REPLACE INTO favorites (full_name, html_url, description, description_zh, language, stars, created_at, tags)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        """, (
-            repo.get("full_name", ""),
-            repo.get("html_url", ""),
-            repo.get("description", ""),
-            repo.get("description_zh", ""),
-            repo.get("language", ""),
-            repo.get("stars", 0),
-            datetime.now().isoformat(),
-            repo.get("tags", "")
-        ))
-        self.conn.commit()
-        self._update_favorites_fts(repo)
-
-    def remove_favorite(self, full_name: str):
-        cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM favorites WHERE full_name = ?", (full_name,))
-        cursor.execute("DELETE FROM favorites_fts WHERE full_name = ?", (full_name,))
-        self.conn.commit()
-
-    def update_favorite_tags(self, full_name: str, tags: str):
-        cursor = self.conn.cursor()
-        cursor.execute("UPDATE favorites SET tags = ? WHERE full_name = ?", (tags, full_name))
-        self.conn.commit()
-
-    def get_all_tags(self) -> List[str]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT tags FROM favorites WHERE tags != ''")
-        tags = set()
-        for row in cursor.fetchall():
-            for tag in row[0].split(","):
-                tag = tag.strip()
-                if tag:
-                    tags.add(tag)
-        return sorted(tags)
-
-    def is_favorite(self, full_name: str) -> bool:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT 1 FROM favorites WHERE full_name = ?", (full_name,))
-        return cursor.fetchone() is not None
-
-    def get_favorites(self, query: str = "") -> List[dict]:
-        cursor = self.conn.cursor()
-        if query:
-            cursor.execute("""
-                SELECT f.* FROM favorites f
-                JOIN favorites_fts fts ON f.rowid = fts.rowid
-                WHERE favorites_fts MATCH ?
-                ORDER BY f.stars DESC
-            """, (query + "*",))
-        else:
-            cursor.execute("SELECT * FROM favorites ORDER BY stars DESC")
-        rows = cursor.fetchall()
-        return [self._row_to_dict(row, ["full_name", "html_url", "description", "description_zh", "language", "stars", "created_at", "tags"]) for row in rows]
-
-    def _update_favorites_fts(self, repo: dict):
-        cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM favorites_fts WHERE full_name = ?", (repo.get("full_name", ""),))
-        cursor.execute("""
-            INSERT INTO favorites_fts (full_name, description, description_zh, language)
-            VALUES (?, ?, ?, ?)
-        """, (repo.get("full_name", ""), repo.get("description", ""), repo.get("description_zh", ""), repo.get("language", "")))
-        self.conn.commit()
-
-    # Download History
-    def add_download(self, record: dict):
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT INTO download_history (full_name, html_url, label, url, mode, time)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            record.get("full_name", ""),
-            record.get("html_url", ""),
-            record.get("label", ""),
-            record.get("url", ""),
-            record.get("mode", ""),
-            record.get("time", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
-        ))
-        self.conn.commit()
-        # Keep only last 300
-        cursor.execute("""
-            DELETE FROM download_history WHERE id NOT IN (
-                SELECT id FROM download_history ORDER BY time DESC LIMIT 300
+    # 排名历史（趋势页涨跌标记：daily/weekly/monthly 的上一期排名快照）
+    def get_ranking_history(self, since: str) -> dict[str, int]:
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                "SELECT data FROM ranking_history WHERE since = ?",
+                (since,),
             )
-        """)
-        self.conn.commit()
+            row = cursor.fetchone()
+            if not row:
+                return {}
+            try:
+                data = json.loads(row[0])
+                return data if isinstance(data, dict) else {}
+            except Exception:
+                return {}
 
-    def get_downloads(self, query: str = "") -> List[dict]:
-        cursor = self.conn.cursor()
-        if query:
-            cursor.execute("""
-                SELECT d.* FROM download_history d
-                JOIN history_fts fts ON d.id = fts.rowid
-                WHERE history_fts MATCH ?
-                ORDER BY d.time DESC
-            """, (query + "*",))
-        else:
-            cursor.execute("SELECT * FROM download_history ORDER BY time DESC LIMIT 300")
-        rows = cursor.fetchall()
-        return [self._row_to_dict(row, ["id", "full_name", "html_url", "label", "url", "mode", "time"]) for row in rows]
+    def save_ranking_history(self, since: str, rankings: dict[str, int]) -> None:
+        if not isinstance(rankings, dict):
+            return
+        with self._translation_lock:
+            cursor = self.conn.cursor()
+            cursor.execute(
+                """
+                INSERT OR REPLACE INTO ranking_history (since, data, updated_at)
+                VALUES (?, ?, ?)
+                """,
+                (since, json.dumps(rankings, ensure_ascii=False), datetime.now().isoformat()),
+            )
+            self.conn.commit()
 
     # 翻译缓存
     def get_translation(self, key: str, ttl_seconds: int = TRANSLATION_CACHE_TTL_SECONDS) -> Optional[str]:
@@ -384,6 +305,23 @@ class Database:
                     updated_at = excluded.updated_at
             ''', (source, target, translated, datetime.now().isoformat()))
             self.conn.commit()
+            self._trim_translation_memory(cursor)
+
+    def _trim_translation_memory(self, cursor) -> None:
+        """记忆库条数超限时，删除最旧的 20% 条目，防止无限膨胀。"""
+        cursor.execute('SELECT COUNT(*) FROM translation_memory')
+        count = cursor.fetchone()[0]
+        if count <= TRANSLATION_MEMORY_MAX_ENTRIES:
+            return
+        trim_count = max(1, int(count * TRANSLATION_MEMORY_TRIM_RATIO))
+        cursor.execute('''
+            DELETE FROM translation_memory WHERE id IN (
+                SELECT id FROM translation_memory
+                ORDER BY updated_at ASC
+                LIMIT ?
+            )
+        ''', (trim_count,))
+        self.conn.commit()
 
     def list_translation_memory(self, limit: int = 200, offset: int = 0) -> List[dict]:
         """列出翻译记忆条目（按最近使用排序）。"""
@@ -509,117 +447,3 @@ class Database:
             cursor.execute('DELETE FROM learned_terms')
             self.conn.commit()
             self._existing_learned.clear()
-    # API Cache
-    def get_api_cache(self, url: str) -> Optional[str]:
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT response, updated_at, ttl_seconds FROM api_cache
-            WHERE url = ? AND datetime(updated_at, '+' || ttl_seconds || ' seconds') > datetime('now')
-        """, (url,))
-        row = cursor.fetchone()
-        return row[0] if row else None
-
-    def get_api_cache_record(self, url: str) -> Optional[dict]:
-        """读取完整的接口缓存记录，不判断缓存是否过期。"""
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "SELECT url, response, updated_at, ttl_seconds FROM api_cache WHERE url = ?",
-            (url,),
-        )
-        row = cursor.fetchone()
-        if not row:
-            return None
-        return {
-            "url": row[0],
-            "response": row[1],
-            "updated_at": row[2],
-            "ttl_seconds": int(row[3] or 0),
-        }
-
-    def get_recent_api_cache_records(
-        self,
-        prefix: str = "",
-        max_age_seconds: int = 86400,
-        limit: int = 100,
-    ) -> List[dict]:
-        """读取指定前缀下近期的接口缓存，包含近期已过期记录。"""
-        try:
-            max_age = max(0, int(max_age_seconds))
-        except (TypeError, ValueError):
-            max_age = 86400
-        try:
-            max_records = max(1, min(int(limit), 1000))
-        except (TypeError, ValueError):
-            max_records = 100
-        cutoff = (datetime.now() - timedelta(seconds=max_age)).isoformat()
-        cursor = self.conn.cursor()
-        cursor.execute(
-            """
-            SELECT url, response, updated_at, ttl_seconds
-            FROM api_cache
-            WHERE url LIKE ? AND updated_at >= ?
-            ORDER BY updated_at DESC
-            LIMIT ?
-            """,
-            (f"{prefix}%", cutoff, max_records),
-        )
-        return [
-            {
-                "url": row[0],
-                "response": row[1],
-                "updated_at": row[2],
-                "ttl_seconds": int(row[3] or 0),
-            }
-            for row in cursor.fetchall()
-        ]
-
-    def set_api_cache(self, url: str, response: str, ttl: int = 300):
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT OR REPLACE INTO api_cache (url, response, updated_at, ttl_seconds)
-            VALUES (?, ?, ?, ?)
-        """, (url, response, datetime.now().isoformat(), ttl))
-        self.conn.commit()
-
-    def clear_expired_cache(self, max_age_seconds: int = 86400):
-        """只清理超过保留期限的旧缓存，给首屏回退保留近期过期数据。"""
-        try:
-            max_age = max(0, int(max_age_seconds))
-        except (TypeError, ValueError):
-            max_age = 86400
-        cutoff = (datetime.now() - timedelta(seconds=max_age)).isoformat()
-        cursor = self.conn.cursor()
-        cursor.execute(
-            "DELETE FROM api_cache WHERE updated_at < ?",
-            (cutoff,),
-        )
-        self.conn.commit()
-
-    def clear_api_cache(self):
-        """清空接口缓存，供用户手动刷新和配置切换使用。"""
-        cursor = self.conn.cursor()
-        cursor.execute("DELETE FROM api_cache")
-        self.conn.commit()
-
-    # Mirror Cache
-    def get_mirror_latency(self, mirror: str) -> Optional[float]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT latency FROM mirror_cache WHERE mirror = ?", (mirror,))
-        row = cursor.fetchone()
-        return row[0] if row else None
-
-    def set_mirror_latency(self, mirror: str, latency: float):
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT OR REPLACE INTO mirror_cache (mirror, latency, updated_at)
-            VALUES (?, ?, ?)
-        """, (mirror, latency, datetime.now().isoformat()))
-        self.conn.commit()
-
-    def get_mirror_ranking(self) -> List[tuple]:
-        cursor = self.conn.cursor()
-        cursor.execute("SELECT mirror, latency FROM mirror_cache ORDER BY latency ASC")
-        return cursor.fetchall()
-
-    def _row_to_dict(self, row, columns: List[str]) -> dict:
-        return dict(zip(columns, row)) if row else {}
