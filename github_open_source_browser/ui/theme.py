@@ -123,6 +123,10 @@ QTabBar::tab:selected {
     color: #1a1a1a;
     font-weight: bold;
 }
+/* QScrollArea 内容区跟随主题：与 QTabWidget::pane 同色，避免设置对话框翻译/其他选项卡残留深色 */
+QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {
+    background-color: #ffffff;
+}
 QCheckBox {
     color: #1a1a1a;
     font-size: 13px;
@@ -316,6 +320,10 @@ QTabBar::tab:selected {
     background-color: #161b22;
     color: #e6edf3;
     font-weight: bold;
+}
+/* QScrollArea 内容区跟随主题：与 QTabWidget::pane 同色，避免设置对话框翻译/其他选项卡残留深色 */
+QScrollArea, QScrollArea > QWidget, QScrollArea > QWidget > QWidget {
+    background-color: #161b22;
 }
 QCheckBox {
     color: #e6edf3;

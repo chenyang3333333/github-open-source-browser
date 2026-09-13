@@ -10,6 +10,7 @@ import json
 import logging
 import re
 import socket
+import time
 
 import requests
 
@@ -24,6 +25,21 @@ logger = logging.getLogger(__name__)
 
 # 全部可用供应商
 _ALL_PROVIDERS = {"auto", "google", "microsoft", "local"}
+
+# ---------------------------------------------------------------------------
+# 取消机制
+# ---------------------------------------------------------------------------
+
+
+class _TranslateCancelled(Exception):
+    """翻译已超时或被取消（deadline 过期）：段落循环应提前终止，立即让出线程池。"""
+
+
+def _raise_if_expired(deadline: float) -> None:
+    """deadline 为单调时钟截止时刻；已过期（或切换项目后被置 0）时抛出取消异常。"""
+    if deadline and time.monotonic() >= deadline:
+        raise _TranslateCancelled()
+
 
 # ---------------------------------------------------------------------------
 # 供应商分发
@@ -108,6 +124,7 @@ def _translate_with_provider(
     text: str, source: str, target: str, provider: str, config: dict, deadline: float, session=None
 ) -> str:
     """按供应商分发单段文本翻译，失败返回空串。"""
+    _raise_if_expired(deadline)  # 每次网络调用前检查：切换项目/超时后立即放弃
     if provider == "google":
         return _google_translate(text, target)
     if provider == "microsoft":
@@ -132,6 +149,7 @@ def translate_text(
     """翻译单段文本。按供应商分发，失败沿回退链降级，最后本地词典兜底。返回 (翻译结果, 是否成功)。"""
     if not text or not text.strip():
         return text, False
+    _raise_if_expired(deadline)  # 已超时/被取消：整段放弃，不再发起网络请求
     # 仅当源语言和目标语言均为英文时才跳过（避免无意义的英文->英文翻译）；
     # 源语言非英文（如 zh->en）时仍需正常翻译
     if source.lower().startswith("en") and target.lower().startswith("en"):
@@ -186,27 +204,30 @@ def translate_readme_markdown(
         segment.clear()
         out.append(_translate_readme_text(seg_text, source, target, cfg, deadline, session))
 
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("```"):
-            flush()
-            in_code = not in_code
-            out.append(line)  # 代码块标记原样保留
-            continue
-        if in_code:
-            out.append(line)  # 代码块内容原样保留
-            continue
-        if not stripped:
-            flush()
-            out.append(line)
-            continue
-        # 结构行（标题/列表/引用/表格/分隔线/图片）：单独处理，普通文本段合并后整段翻译
-        if _README_STRUCT_RE.match(stripped):
-            flush()
-            out.append(_translate_readme_text(line, source, target, cfg, deadline, session))
-            continue
-        segment.append(line)
-    flush()
+    try:
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("```"):
+                flush()
+                in_code = not in_code
+                out.append(line)  # 代码块标记原样保留
+                continue
+            if in_code:
+                out.append(line)  # 代码块内容原样保留
+                continue
+            if not stripped:
+                flush()
+                out.append(line)
+                continue
+            # 结构行（标题/列表/引用/表格/分隔线/图片）：单独处理，普通文本段合并后整段翻译
+            if _README_STRUCT_RE.match(stripped):
+                flush()
+                out.append(_translate_readme_text(line, source, target, cfg, deadline, session))
+                continue
+            segment.append(line)
+        flush()
+    except _TranslateCancelled:
+        return ""  # 切换项目/超时：放弃剩余段落翻译，立即让出线程池
     return "\n".join(out)
 
 

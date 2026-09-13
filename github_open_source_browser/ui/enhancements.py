@@ -202,6 +202,16 @@ def _init_ui_with_tray(self):
 
 
 def _close_event_with_tray(self, event):
+    # 开启“最小化到系统托盘”时，点击关闭按钮隐藏到托盘而非退出；
+    # 托盘菜单“退出”已先隐藏托盘图标（isVisible() 为 False），仍可正常走退出流程
+    minimize = True
+    config = getattr(self, "config", None)
+    if isinstance(config, dict):
+        minimize = bool(config.get("minimize_to_tray", True))
+    if minimize and getattr(self, "_tray_icon", None) and self._tray_icon.isVisible():
+        event.ignore()
+        self.hide()
+        return
     if getattr(self, "_tray_icon", None):
         self._tray_icon.hide()
     # 安全关闭：先取消队列翻译，再等待两个线程池中运行中的 Worker 结束，

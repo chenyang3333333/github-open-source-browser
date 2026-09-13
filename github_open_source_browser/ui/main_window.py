@@ -163,6 +163,7 @@ class MainWindow(QMainWindow):
         self._dark_mode = self.config.get("dark_mode", False)
         self._translation_language_generation = 0
         self._translation_gen = 0  # 详情翻译代数：切换项目时递增以取消旧翻译
+        self._detail_translate_deadline = 0.0  # 详情翻译截止时刻（单调时钟）；切换项目/视图时置 0 立即中断
         self._current_readme = ""
         self._batch_cancel = False
         self._loading_more = False
@@ -561,6 +562,7 @@ class MainWindow(QMainWindow):
         self._batch_translate_done = 0
         # 递增翻译代数：中断旧视图的详情/README 加载与翻译，把线程池资源留给新视图
         self._translation_gen += 1
+        self._detail_translate_deadline = -1.0  # 立即过期进行中的详情翻译（0 表示无限制，负值表示已过期）
         view = self.view_combo.currentData()
         page_map = {"trending": 1, "favorites": 2, "history": 3, "dashboard": 4}
         self._view_stack.setCurrentIndex(page_map.get(view, 0))
@@ -1143,6 +1145,7 @@ class MainWindow(QMainWindow):
         # 若在此清空列表翻译队列，已渲染批次中尚未出队的项目会永久丢失翻译
         # （只有下一批 _translate_visible_batch 才会恢复补位，最后一批则永不翻译）。
         self._translation_gen += 1
+        self._detail_translate_deadline = -1.0  # 中断上一个项目的详情翻译（0 表示无限制，负值表示已过期）
         self._translate_anim_timer.stop()
         self._batch_translate_total = 0
         self._batch_translate_done = 0
@@ -1283,6 +1286,7 @@ class MainWindow(QMainWindow):
         # 只递增详情翻译代数取消旧详情任务；不设置 _batch_cancel、不清空列表翻译队列，
         # 详情翻译走 detail_translate_pool，与列表批量翻译互不干扰
         self._translation_gen += 1
+        self._detail_translate_deadline = time.monotonic() + 60  # 本次翻译截止时刻；切换项目/视图时被置 0 立即中断
         self._batch_translate_total = 0
         self._batch_translate_done = 0
         current_gen = self._translation_gen
@@ -1316,14 +1320,15 @@ class MainWindow(QMainWindow):
             if self._translation_gen != current_gen:
                 return None
             desc = repo.get("description", "")
-            return self.service.translate_description(desc, target, deadline=time.monotonic() + 15)
+            # min：保持单段简介 15 秒总时长上限；切换项目后 _detail_translate_deadline 被置 0，立即过期
+            return self.service.translate_description(desc, target, deadline=min(self._detail_translate_deadline, time.monotonic() + 15))
 
         def task_readme():
             if self._translation_gen != current_gen:
                 return None
             cached_readme = self._current_readme or ""
             if cached_readme:
-                return self.service.translate_readme(cached_readme, target, deadline=time.monotonic() + 60)
+                return self.service.translate_readme(cached_readme, target, deadline=self._detail_translate_deadline)
             # README 尚未加载完成：先补加载再翻译，保证翻译按钮始终能产出 README 译文
             if self._translation_gen != current_gen:
                 return None
@@ -1331,7 +1336,7 @@ class MainWindow(QMainWindow):
             if self._translation_gen != current_gen:
                 return None
             self._current_readme = readme or ""
-            return self.service.translate_readme(self._current_readme, target, deadline=time.monotonic() + 60) if self._current_readme else ""
+            return self.service.translate_readme(self._current_readme, target, deadline=self._detail_translate_deadline) if self._current_readme else ""
 
         def on_desc(result):
             if current_gen == self._translation_gen and result:
@@ -1356,6 +1361,7 @@ class MainWindow(QMainWindow):
 
     def _auto_translate_detail(self, repo, gen):
         """自动翻译当前项目（由设置触发），翻译前先取消之前的翻译。"""
+        self._detail_translate_deadline = time.monotonic() + 60  # 本次翻译截止时刻；切换项目/视图时被置 0 立即中断
         self._translate_anim_dots = 0
         self._translate_anim_timer.start()
         target = self.config.get("target_language", "zh-CN")
@@ -1381,13 +1387,14 @@ class MainWindow(QMainWindow):
             if self._translation_gen != gen:
                 return None
             desc = repo.get("description", "")
-            return self.service.translate_description(desc, target, deadline=time.monotonic() + 15)
+            # min：保持单段简介 15 秒总时长上限；切换项目后 _detail_translate_deadline 被置 0，立即过期
+            return self.service.translate_description(desc, target, deadline=min(self._detail_translate_deadline, time.monotonic() + 15))
 
         def task_readme():
             if self._translation_gen != gen:
                 return None
             cached_readme = self._current_readme or ""
-            return self.service.translate_readme(cached_readme, target, deadline=time.monotonic() + 60) if cached_readme else ""
+            return self.service.translate_readme(cached_readme, target, deadline=self._detail_translate_deadline) if cached_readme else ""
 
         def on_desc(result):
             if gen == self._translation_gen and result:
