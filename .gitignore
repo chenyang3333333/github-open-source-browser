@@ -1,6 +1,5 @@
 # 构建产物与运行时文件
 GitHub开源浏览器.exe
-GitHub开源浏览器.spec
 build/
 dist/
 __pycache__/
